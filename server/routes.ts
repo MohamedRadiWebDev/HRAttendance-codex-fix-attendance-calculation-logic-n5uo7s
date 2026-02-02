@@ -235,6 +235,8 @@ export async function registerRoutes(
             const shiftStartParts = currentShiftStart.split(':');
             const shiftStartHour = parseInt(shiftStartParts[0]);
             const shiftStartMin = parseInt(shiftStartParts[1]);
+            
+            // shiftStartLocal represents 09:00 on day 'd' in UTC for comparison
             const shiftStartLocal = new Date(Date.UTC(
               d.getUTCFullYear(),
               d.getUTCMonth(),
@@ -243,12 +245,13 @@ export async function registerRoutes(
               shiftStartMin,
               0
             ));
-            const checkInLocal = checkIn ? toLocal(checkIn) : null;
+
+            // checkIn is already UTC from DB. 
+            // We compare UTC checkIn directly with UTC shift start on that same day.
             if (!activeAdj && checkIn) {
-              const diffMs = checkInLocal
-                ? checkInLocal.getTime() - shiftStartLocal.getTime()
-                : 0;
+              const diffMs = checkIn.getTime() - shiftStartLocal.getTime();
               const lateMinutes = Math.max(0, Math.ceil(diffMs / (1000 * 60)));
+              
               if (diffMs > 15 * 60 * 1000) {
                 status = "Late";
                 let latePenalty = 0;
