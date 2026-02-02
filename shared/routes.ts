@@ -141,6 +141,7 @@ export const api = {
       input: z.object({
         startDate: z.string(),
         endDate: z.string(),
+        timezoneOffsetMinutes: z.number().optional(),
       }),
       responses: {
         200: z.object({ message: z.string(), processedCount: z.number() }),
