@@ -186,9 +186,10 @@ export async function registerRoutes(
           
           // 1. Get applicable rules for this employee and date
           const activeRules = rules.filter(r => {
-            const ruleStart = r.startDate;
-            const ruleEnd = r.endDate;
-            if (dateStr < ruleStart || dateStr > ruleEnd) return false;
+            const ruleStart = new Date(r.startDate);
+            const ruleEnd = new Date(r.endDate);
+            const current = new Date(dateStr);
+            if (current < ruleStart || current > ruleEnd) return false;
             
             if (r.scope === 'all') return true;
             if (r.scope.startsWith('dept:') && employee.department === r.scope.replace('dept:', '')) return true;
@@ -214,7 +215,6 @@ export async function registerRoutes(
             dateStr <= a.endDate
           );
 
-          // Match punches to local day using the formatDateLocal helper
           const dayPunches = punches.filter(p => 
             p.employeeCode === employee.code && 
             formatLocalDate(p.punchDatetime) === dateStr
@@ -231,9 +231,6 @@ export async function registerRoutes(
 
             let penalties = [];
             let status = activeAdj ? "Excused" : "Present";
-            
-            // Compute shiftStart in UTC using the provided timezone offset
-            // so lateness math uses local shift times
             const shiftStartParts = currentShiftStart.split(':');
             const shiftStartHour = parseInt(shiftStartParts[0]);
             const shiftStartMin = parseInt(shiftStartParts[1]);
