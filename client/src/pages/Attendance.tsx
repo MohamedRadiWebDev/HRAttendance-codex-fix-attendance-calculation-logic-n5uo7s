@@ -77,6 +77,14 @@ export default function Attendance() {
     setLocation(`/attendance?${params.toString()}`, { replace: true });
   }, [dateRange, setLocation]);
 
+  useEffect(() => {
+    if (!dateRange.start && !dateRange.end) {
+      localStorage.removeItem("attendanceStartDate");
+      localStorage.removeItem("attendanceEndDate");
+      setLocation("/attendance", { replace: true });
+    }
+  }, [dateRange, setLocation]);
+
   const sectors = Array.from(new Set(employees?.map(e => e.sector).filter(Boolean) || []));
   const [sectorFilter, setSectorFilter] = useState("all");
 
@@ -127,6 +135,10 @@ export default function Attendance() {
                     onChange={e => {
                       const value = e.target.value;
                       setDateInput(prev => ({ ...prev, start: value }));
+                      if (!value) {
+                        setDateRange(prev => ({ ...prev, start: undefined }));
+                        return;
+                      }
                       const parsed = parseDateInput(value);
                       if (parsed) {
                         setDateRange(prev => ({ ...prev, start: format(parsed, "yyyy-MM-dd") }));
@@ -142,6 +154,10 @@ export default function Attendance() {
                     onChange={e => {
                       const value = e.target.value;
                       setDateInput(prev => ({ ...prev, end: value }));
+                      if (!value) {
+                        setDateRange(prev => ({ ...prev, end: undefined }));
+                        return;
+                      }
                       const parsed = parseDateInput(value);
                       if (parsed) {
                         setDateRange(prev => ({ ...prev, end: format(parsed, "yyyy-MM-dd") }));

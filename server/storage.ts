@@ -171,11 +171,12 @@ export class DatabaseStorage implements IStorage {
       .where(and(...conditions))
       .orderBy(desc(attendanceRecords.date), desc(attendanceRecords.id));
     
-    if (limit > 0) {
-      dataQuery = dataQuery.limit(limit).offset(offset);
-    }
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 0;
+    const safeOffset = safeLimit > 0 && Number.isFinite(offset) && offset > 0 ? offset : 0;
 
-    const data = await dataQuery;
+    const data = safeLimit > 0 
+      ? await baseQuery.limit(safeLimit).offset(safeOffset)
+      : await baseQuery;
 
     return { data, total: Number(countResult?.count || 0) };
   }

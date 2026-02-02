@@ -124,8 +124,10 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Start and End dates required" });
     }
     const limitNumber = Number(limit);
-    const safeLimit = Number.isFinite(limitNumber) ? limitNumber : 0;
-    const offset = safeLimit > 0 ? (Number(page) - 1) * safeLimit : 0;
+    const safeLimit = Number.isFinite(limitNumber) && limitNumber > 0 ? limitNumber : 0;
+    const pageNumber = Number(page);
+    const safePage = Number.isFinite(pageNumber) && pageNumber > 0 ? pageNumber : 1;
+    const offset = safeLimit > 0 ? (safePage - 1) * safeLimit : 0;
     const { data, total } = await storage.getAttendance(
       String(startDate), 
       String(endDate), 
@@ -133,24 +135,37 @@ export async function registerRoutes(
       safeLimit,
       offset
     );
-    res.json({ data, total, page: Number(page), limit: Number(limit) });
+    res.json({ data, total, page: safePage, limit: safeLimit });
   });
 
   app.post(api.attendance.process.path, async (req, res) => {
     const { startDate, endDate } = req.body;
     try {
-      const formatDate = (date: Date) => {
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, "0");
-        const day = String(date.getDate()).padStart(2, "0");
+      const safeOffsetMinutes = Number.isFinite(Number(timezoneOffsetMinutes))
+        ? Number(timezoneOffsetMinutes)
+        : 0;
+      // Format date in local timezone space using the provided offset
+      const formatDateLocal = (date: Date) => {
+        const localTime = new Date(date.getTime() - safeOffsetMinutes * 60 * 1000);
+        const year = localTime.getUTCFullYear();
+        const month = String(localTime.getUTCMonth() + 1).padStart(2, "0");
+        const day = String(localTime.getUTCDate()).padStart(2, "0");
         return `${year}-${month}-${day}`;
       };
 
       const allEmployees = await storage.getEmployees();
-      const punchStart = new Date(startDate);
-      punchStart.setHours(0, 0, 0, 0);
-      const punchEnd = new Date(endDate);
-      punchEnd.setHours(23, 59, 59, 999);
+      
+      // Compute punch fetch bounds in UTC using local day boundaries
+      const [startYear, startMonth, startDay] = startDate.split("-").map(Number);
+      const [endYear, endMonth, endDay] = endDate.split("-").map(Number);
+      const punchStart = new Date(
+        Date.UTC(startYear, startMonth - 1, startDay, 0, 0, 0, 0) + safeOffsetMinutes * 60 * 1000
+      );
+      
+      const punchEnd = new Date(
+        Date.UTC(endYear, endMonth - 1, endDay, 23, 59, 59, 999) + safeOffsetMinutes * 60 * 1000
+      );
+      
       const punches = await storage.getPunches(punchStart, punchEnd);
       const rules = await storage.getRules();
       const adjustments = await storage.getAdjustments();
@@ -196,7 +211,7 @@ export async function registerRoutes(
 
           const dayPunches = punches.filter(p => 
             p.employeeCode === employee.code && 
-            formatDate(p.punchDatetime) === dateStr
+            formatDateLocal(p.punchDatetime) === dateStr
           ).sort((a, b) => a.punchDatetime.getTime() - b.punchDatetime.getTime());
 
           if (dayPunches.length > 0 || activeAdj) {
@@ -211,8 +226,19 @@ export async function registerRoutes(
             let penalties = [];
             let status = activeAdj ? "Excused" : "Present";
             const shiftStartParts = currentShiftStart.split(':');
-            const shiftStart = new Date(d);
-            shiftStart.setHours(parseInt(shiftStartParts[0]), parseInt(shiftStartParts[1]), 0);
+            const shiftStartHour = parseInt(shiftStartParts[0]);
+            const shiftStartMin = parseInt(shiftStartParts[1]);
+            // Local shift time for this date
+            const shiftStartUTC = new Date(Date.UTC(
+              d.getUTCFullYear(),
+              d.getUTCMonth(),
+              d.getUTCDate(),
+              shiftStartHour,
+              shiftStartMin,
+              0
+            ));
+            // Adjust to UTC based on client timezone
+            shiftStartUTC.setTime(shiftStartUTC.getTime() + safeOffsetMinutes * 60 * 1000);
 
             if (!activeAdj && checkIn) {
               const diffMs = checkIn.getTime() - shiftStart.getTime();
