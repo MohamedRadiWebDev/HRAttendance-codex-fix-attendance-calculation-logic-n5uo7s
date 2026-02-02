@@ -30,7 +30,13 @@ export default function Import() {
     }
     if (typeof rawDate === "string") {
       const trimmed = rawDate.trim();
+      // Handle Arabic dates with PM/AM (e.g., "23/12/2025 5:40 PM")
+      const normalized = trimmed
+        .replace(/ص/g, 'AM')
+        .replace(/م/g, 'PM');
+
       const formats = [
+        "dd/MM/yyyy h:mm a",
         "dd/MM/yyyy HH:mm:ss",
         "dd/MM/yyyy HH:mm",
         "dd/MM/yyyy",
@@ -39,12 +45,12 @@ export default function Import() {
         "yyyy-MM-dd",
       ];
       for (const fmt of formats) {
-        const parsed = parse(trimmed, fmt, new Date());
+        const parsed = parse(normalized, fmt, new Date());
         if (isValid(parsed)) return parsed;
       }
-      const iso = parseISO(trimmed);
+      const iso = parseISO(normalized);
       if (isValid(iso)) return iso;
-      const fallback = new Date(trimmed);
+      const fallback = new Date(normalized);
       return isValid(fallback) ? fallback : null;
     }
     const fallback = new Date(rawDate as any);
@@ -137,6 +143,8 @@ export default function Import() {
             row['التاريخ'] || row['الوقت'];
           
           const punchDatetime = parsePunchDate(rawDate);
+          
+          console.log("Processing row:", { employeeCode, rawDate, punchDatetime });
           
           return {
             employeeCode,
