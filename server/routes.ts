@@ -285,8 +285,8 @@ export async function registerRoutes(
               checkOut: null,
               totalHours: 0,
               status: "Absent",
+              penalties: [{ type: "غياب", value: 1 }],
               overtimeHours: 0,
-              penalties: [],
               isOvernight: false
             });
             processedCount++;
