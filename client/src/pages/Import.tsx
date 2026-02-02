@@ -109,7 +109,7 @@ export default function Import() {
           
           return {
             employeeCode,
-            punchDatetime: format(punchDatetime, "yyyy-MM-dd'T'HH:mm:ss"),
+            punchDatetime: format(punchDatetime, "yyyy-MM-dd'T'HH:mm:ssXXX"),
           };
         }).filter(p => p.employeeCode && p.punchDatetime && p.punchDatetime !== "Invalid Date");
 

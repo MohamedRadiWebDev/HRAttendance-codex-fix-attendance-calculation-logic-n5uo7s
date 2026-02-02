@@ -137,38 +137,48 @@ export async function registerRoutes(
   });
 
   app.post(api.attendance.process.path, async (req, res) => {
-    const { startDate, endDate } = req.body;
+    const { startDate, endDate, timezoneOffsetMinutes = 0 } = req.body;
     try {
-      const formatDate = (date: Date) => {
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, "0");
-        const day = String(date.getDate()).padStart(2, "0");
+      // Format date in local timezone space using the provided offset
+      const formatDateLocal = (date: Date, offsetMinutes: number) => {
+        const localTime = new Date(date.getTime() - offsetMinutes * 60 * 1000);
+        const year = localTime.getUTCFullYear();
+        const month = String(localTime.getUTCMonth() + 1).padStart(2, "0");
+        const day = String(localTime.getUTCDate()).padStart(2, "0");
         return `${year}-${month}-${day}`;
       };
 
       const allEmployees = await storage.getEmployees();
-      const punchStart = new Date(startDate);
-      punchStart.setHours(0, 0, 0, 0);
-      const punchEnd = new Date(endDate);
-      punchEnd.setHours(23, 59, 59, 999);
+      
+      // Compute punch fetch bounds in UTC using local day boundaries
+      // startDate at 00:00 local = startDate at 00:00 + offset in UTC
+      const punchStartLocal = new Date(`${startDate}T00:00:00`);
+      const punchStart = new Date(punchStartLocal.getTime() + timezoneOffsetMinutes * 60 * 1000);
+      
+      const punchEndLocal = new Date(`${endDate}T23:59:59.999`);
+      const punchEnd = new Date(punchEndLocal.getTime() + timezoneOffsetMinutes * 60 * 1000);
+      
       const punches = await storage.getPunches(punchStart, punchEnd);
       const rules = await storage.getRules();
       const adjustments = await storage.getAdjustments();
       
       let processedCount = 0;
-      const start = new Date(startDate);
-      const end = new Date(endDate);
+      
+      // Iterate days in local-date space
+      const startParts = startDate.split('-').map(Number);
+      const endParts = endDate.split('-').map(Number);
+      const startLocal = new Date(Date.UTC(startParts[0], startParts[1] - 1, startParts[2]));
+      const endLocal = new Date(Date.UTC(endParts[0], endParts[1] - 1, endParts[2]));
 
       for (const employee of allEmployees) {
-        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-          const dateStr = formatDate(d);
+        for (let d = new Date(startLocal); d <= endLocal; d.setUTCDate(d.getUTCDate() + 1)) {
+          const dateStr = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
           
           // 1. Get applicable rules for this employee and date
           const activeRules = rules.filter(r => {
-            const ruleStart = new Date(r.startDate);
-            const ruleEnd = new Date(r.endDate);
-            const current = new Date(dateStr);
-            if (current < ruleStart || current > ruleEnd) return false;
+            const ruleStart = r.startDate;
+            const ruleEnd = r.endDate;
+            if (dateStr < ruleStart || dateStr > ruleEnd) return false;
             
             if (r.scope === 'all') return true;
             if (r.scope.startsWith('dept:') && employee.department === r.scope.replace('dept:', '')) return true;
@@ -194,9 +204,10 @@ export async function registerRoutes(
             dateStr <= a.endDate
           );
 
+          // Match punches to local day using the formatDateLocal helper
           const dayPunches = punches.filter(p => 
             p.employeeCode === employee.code && 
-            formatDate(p.punchDatetime) === dateStr
+            formatDateLocal(p.punchDatetime, timezoneOffsetMinutes) === dateStr
           ).sort((a, b) => a.punchDatetime.getTime() - b.punchDatetime.getTime());
 
           if (dayPunches.length > 0 || activeAdj) {
@@ -210,12 +221,26 @@ export async function registerRoutes(
 
             let penalties = [];
             let status = activeAdj ? "Excused" : "Present";
+            
+            // Compute shiftStart in UTC using the provided timezone offset
+            // so lateness math uses local shift times
             const shiftStartParts = currentShiftStart.split(':');
-            const shiftStart = new Date(d);
-            shiftStart.setHours(parseInt(shiftStartParts[0]), parseInt(shiftStartParts[1]), 0);
+            const shiftStartHour = parseInt(shiftStartParts[0]);
+            const shiftStartMin = parseInt(shiftStartParts[1]);
+            // Local shift time for this date
+            const shiftStartUTC = new Date(Date.UTC(
+              d.getUTCFullYear(),
+              d.getUTCMonth(),
+              d.getUTCDate(),
+              shiftStartHour,
+              shiftStartMin,
+              0
+            ));
+            // Adjust to UTC based on client timezone
+            shiftStartUTC.setTime(shiftStartUTC.getTime() + timezoneOffsetMinutes * 60 * 1000);
 
             if (!activeAdj && checkIn) {
-              const diffMs = checkIn.getTime() - shiftStart.getTime();
+              const diffMs = checkIn.getTime() - shiftStartUTC.getTime();
               const lateMinutes = Math.max(0, Math.ceil(diffMs / (1000 * 60)));
               if (diffMs > 15 * 60 * 1000) {
                 status = "Late";
