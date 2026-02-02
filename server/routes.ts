@@ -142,17 +142,14 @@ export async function registerRoutes(
   app.post(api.attendance.process.path, async (req, res) => {
     const { startDate, endDate, timezoneOffsetMinutes } = req.body;
     try {
+      // offsetMinutes is used to convert local time to UTC for punch lookup
+      // If the client is in GMT+2, offsetMinutes is -120
       const offsetMinutes = Number.isFinite(Number(timezoneOffsetMinutes))
         ? Number(timezoneOffsetMinutes)
-        : 0;
+        : -120; // Default to Cairo time (GMT+2) if not provided
+      
       const toLocal = (date: Date) => new Date(date.getTime() - offsetMinutes * 60 * 1000);
-      const formatLocalDate = (date: Date) => {
-        const local = toLocal(date);
-        const year = local.getUTCFullYear();
-        const month = String(local.getUTCMonth() + 1).padStart(2, "0");
-        const day = String(local.getUTCDate()).padStart(2, "0");
-        return `${year}-${month}-${day}`;
-      };
+      
       const formatLocalDay = (date: Date) => {
         const year = date.getUTCFullYear();
         const month = String(date.getUTCMonth() + 1).padStart(2, "0");
@@ -162,16 +159,20 @@ export async function registerRoutes(
 
       const allEmployees = await storage.getEmployees();
       
-      // Compute punch fetch bounds in UTC using local day boundaries
+      // Compute punch fetch bounds in UTC
       const [startYear, startMonth, startDay] = startDate.split("-").map(Number);
       const [endYear, endMonth, endDay] = endDate.split("-").map(Number);
-      const punchStart = new Date(
-        Date.UTC(startYear, startMonth - 1, startDay, 0, 0, 0, 0) + offsetMinutes * 60 * 1000
-      );
-      const punchEnd = new Date(
-        Date.UTC(endYear, endMonth - 1, endDay, 23, 59, 59, 999) + offsetMinutes * 60 * 1000
-      );
-      const punches = await storage.getPunches(punchStart, punchEnd);
+      
+      // Boundaries in UTC
+      const punchStart = new Date(Date.UTC(startYear, startMonth - 1, startDay, 0, 0, 0, 0));
+      const punchEnd = new Date(Date.UTC(endYear, endMonth - 1, endDay, 23, 59, 59, 999));
+      
+      // Adjust bounds based on timezone to ensure we catch all potential punches
+      // We expand the search by 12 hours on each side to be safe
+      const searchStart = new Date(punchStart.getTime() + offsetMinutes * 60 * 1000 - (12 * 60 * 60 * 1000));
+      const searchEnd = new Date(punchEnd.getTime() + offsetMinutes * 60 * 1000 + (12 * 60 * 60 * 1000));
+      
+      const punches = await storage.getPunches(searchStart, searchEnd);
       const rules = await storage.getRules();
       const adjustments = await storage.getAdjustments();
       
@@ -216,10 +217,18 @@ export async function registerRoutes(
             dateStr <= a.endDate
           );
 
-          const dayPunches = punches.filter(p => 
-            p.employeeCode === employee.code && 
-            formatLocalDate(p.punchDatetime) === dateStr
-          ).sort((a, b) => a.punchDatetime.getTime() - b.punchDatetime.getTime());
+          // Get punches for this employee on this local day
+          // A punch belongs to this day if its local time matches dateStr
+          const dayPunches = punches.filter(p => {
+            if (p.employeeCode !== employee.code) return false;
+            
+            // Convert punch UTC to local time to see which day it belongs to
+            const localPunch = toLocal(p.punchDatetime);
+            const py = localPunch.getUTCFullYear();
+            const pm = String(localPunch.getUTCMonth() + 1).padStart(2, "0");
+            const pd = String(localPunch.getUTCDate()).padStart(2, "0");
+            return `${py}-${pm}-${pd}` === dateStr;
+          }).sort((a, b) => a.punchDatetime.getTime() - b.punchDatetime.getTime());
 
           if (dayPunches.length > 0 || activeAdj) {
             const checkIn = dayPunches.length > 0 ? dayPunches[0].punchDatetime : null;
@@ -236,8 +245,9 @@ export async function registerRoutes(
             const shiftStartHour = parseInt(shiftStartParts[0]);
             const shiftStartMin = parseInt(shiftStartParts[1]);
             
-            // shiftStartLocal represents 09:00 on day 'd' in UTC for comparison
-            const shiftStartLocal = new Date(Date.UTC(
+            // shiftStartLocal represents the shift start time in LOCAL time for this day
+            // We then convert it to UTC to compare with the punch UTC
+            const shiftStartUTC = new Date(Date.UTC(
               d.getUTCFullYear(),
               d.getUTCMonth(),
               d.getUTCDate(),
@@ -245,11 +255,11 @@ export async function registerRoutes(
               shiftStartMin,
               0
             ));
+            // Adjust shiftStartUTC to be actual UTC (reverse the local-to-UTC offset)
+            shiftStartUTC.setTime(shiftStartUTC.getTime() + offsetMinutes * 60 * 1000);
 
-            // checkIn is already UTC from DB. 
-            // We compare UTC checkIn directly with UTC shift start on that same day.
             if (!activeAdj && checkIn) {
-              const diffMs = checkIn.getTime() - shiftStartLocal.getTime();
+              const diffMs = checkIn.getTime() - shiftStartUTC.getTime();
               const lateMinutes = Math.max(0, Math.ceil(diffMs / (1000 * 60)));
               
               if (diffMs > 15 * 60 * 1000) {
