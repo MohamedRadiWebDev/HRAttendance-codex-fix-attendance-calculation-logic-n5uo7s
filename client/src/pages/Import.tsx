@@ -114,11 +114,27 @@ export default function Import() {
         await importEmployees.mutateAsync(mapped);
       } else {
         const mapped = previewData.map((row: any) => {
+          // Normalize row keys to handle Arabic characters and common variations
+          const normalizedRow: any = {};
+          Object.keys(row).forEach(key => {
+            const normalizedKey = key.trim().replace(/\s+/g, '_');
+            normalizedRow[normalizedKey] = row[key];
+          });
+
           // Try to find employee code
-          const employeeCode = String(row['كود'] || row['ID'] || row['Code'] || row['الكود'] || row['id'] || row['Employee ID'] || "");
+          const employeeCode = String(
+            row['كود'] || row['ID'] || row['Code'] || row['الكود'] || 
+            normalizedRow['كود'] || normalizedRow['الكود'] || 
+            row['id'] || row['Employee ID'] || ""
+          ).trim();
           
           // Try to find date/time
-          const rawDate = row['التاريخ_والوقت'] || row['Punch Datetime'] || row['Clock In'] || row['Date'] || row['Time'] || row['date'] || row['time'] || row['التاريخ'] || row['الوقت'];
+          const rawDate = 
+            row['التاريخ_والوقت'] || row['التاريخ والوقت'] || row['التاريخ_والوقت'] ||
+            normalizedRow['التاريخ_والوقت'] || normalizedRow['التاريخ_والوقت'] ||
+            row['Punch Datetime'] || row['Clock In'] || row['Date'] || 
+            row['Time'] || row['date'] || row['time'] || 
+            row['التاريخ'] || row['الوقت'];
           
           const punchDatetime = parsePunchDate(rawDate);
           
@@ -128,7 +144,10 @@ export default function Import() {
           };
         }).filter(p => p.employeeCode && p.punchDatetime);
 
-        if (mapped.length === 0) throw new Error("لم يتم العثور على سجلات بصمة صالحة. تأكد من وجود أعمدة (ID, Clock In)");
+        if (mapped.length === 0) {
+          console.error("Mapping failed. First row keys:", Object.keys(previewData[0]));
+          throw new Error("لم يتم العثور على سجلات بصمة صالحة. تأكد من وجود أعمدة (كود، التاريخ_والوقت)");
+        }
         await importPunches.mutateAsync(mapped);
 
         const punchDates = mapped
