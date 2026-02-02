@@ -31,6 +31,7 @@ export default function Import() {
     if (typeof rawDate === "string") {
       const trimmed = rawDate.trim();
       const formats = [
+        "dd/MM/yyyy h:mm a",
         "dd/MM/yyyy HH:mm:ss",
         "dd/MM/yyyy HH:mm",
         "dd/MM/yyyy",
