@@ -237,12 +237,8 @@ export async function registerRoutes(
               shiftStartMin,
               0
             ));
-            const checkInLocal = checkIn
-              ? new Date(checkIn.getTime() - safeOffsetMinutes * 60 * 1000)
-              : null;
-
-            if (!activeAdj && checkInLocal) {
-              const diffMs = checkInLocal.getTime() - shiftStartLocal.getTime();
+            if (!activeAdj && checkIn) {
+              const diffMs = checkIn.getTime() - shiftStartLocal.getTime();
               const lateMinutes = Math.max(0, Math.ceil(diffMs / (1000 * 60)));
               if (diffMs > 15 * 60 * 1000) {
                 status = "Late";
