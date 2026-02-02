@@ -120,17 +120,18 @@ export async function registerRoutes(
   // Attendance
   app.get(api.attendance.list.path, async (req, res) => {
     const { startDate, endDate, employeeCode, page = 1, limit = 50 } = req.query;
-    if (!startDate || !endDate) {
-      return res.status(400).json({ message: "Start and End dates required" });
-    }
+    // Remove strict validation for debugging or allow broader range
+    const effectiveStart = startDate ? String(startDate) : "1970-01-01";
+    const effectiveEnd = endDate ? String(endDate) : "2099-12-31";
+    
     const limitNumber = Number(limit);
     const safeLimit = Number.isFinite(limitNumber) && limitNumber > 0 ? limitNumber : 0;
     const pageNumber = Number(page);
     const safePage = Number.isFinite(pageNumber) && pageNumber > 0 ? pageNumber : 1;
     const offset = safeLimit > 0 ? (safePage - 1) * safeLimit : 0;
     const { data, total } = await storage.getAttendance(
-      String(startDate), 
-      String(endDate), 
+      effectiveStart, 
+      effectiveEnd, 
       employeeCode as string,
       safeLimit,
       offset

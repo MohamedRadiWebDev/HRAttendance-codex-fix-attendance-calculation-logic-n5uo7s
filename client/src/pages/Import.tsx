@@ -138,7 +138,7 @@ export default function Import() {
             normalizedRow['التاريخ_والوقت'] || normalizedRow['التاريخ_والوقت'] ||
             row['Punch Datetime'] || row['Clock In'] || row['Date'] || 
             row['Time'] || row['date'] || row['time'] || 
-            row['التاريخ'] || row['الوقت'];
+            row['التاريخ'] || row['الوقت'] || row['التاريخ_والوقت'];
           
           const punchDatetime = parsePunchDate(rawDate);
           
