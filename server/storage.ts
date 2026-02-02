@@ -166,7 +166,7 @@ export class DatabaseStorage implements IStorage {
       count: sql<number>`count(*)` 
     }).from(attendanceRecords).where(and(...conditions));
 
-    const baseQuery = db.select()
+    let dataQuery = db.select()
       .from(attendanceRecords)
       .where(and(...conditions))
       .orderBy(desc(attendanceRecords.date), desc(attendanceRecords.id));
