@@ -8,7 +8,7 @@ import * as XLSX from 'xlsx';
 import { useImportEmployees, useImportPunches } from "@/hooks/use-employees";
 import { useProcessAttendance } from "@/hooks/use-attendance";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { format } from "date-fns";
+import { format, parse, isValid } from "date-fns";
 
 export default function Import() {
   const { toast } = useToast();
@@ -18,6 +18,20 @@ export default function Import() {
   const [previewData, setPreviewData] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState("employees");
   const [isProcessing, setIsProcessing] = useState(false);
+
+  const parsePunchDate = (rawDate: unknown) => {
+    if (rawDate instanceof Date) {
+      return isValid(rawDate) ? rawDate : null;
+    }
+    if (typeof rawDate === "string") {
+      const parsed = parse(rawDate.trim(), "dd/MM/yyyy HH:mm", new Date());
+      if (isValid(parsed)) return parsed;
+      const fallback = new Date(rawDate);
+      return isValid(fallback) ? fallback : null;
+    }
+    const fallback = new Date(rawDate as any);
+    return isValid(fallback) ? fallback : null;
+  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -88,30 +102,13 @@ export default function Import() {
           // Try to find date/time
           const rawDate = row['التاريخ_والوقت'] || row['Punch Datetime'] || row['Clock In'] || row['Date'] || row['Time'] || row['date'] || row['time'] || row['التاريخ'] || row['الوقت'];
           
-          let punchDatetime: Date;
-          if (rawDate instanceof Date) {
-            punchDatetime = rawDate;
-          } else if (typeof rawDate === 'string') {
-            // Handle common DD/MM/YYYY format if new Date() fails
-            const parts = rawDate.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})\s+(\d{1,2}):(\d{2})(\s+AM|\s+PM)?/i);
-            if (parts) {
-              let [_, day, month, year, hours, minutes, ampm] = parts;
-              let h = parseInt(hours);
-              if (ampm && ampm.trim().toUpperCase() === 'PM' && h < 12) h += 12;
-              if (ampm && ampm.trim().toUpperCase() === 'AM' && h === 12) h = 0;
-              punchDatetime = new Date(parseInt(year), parseInt(month) - 1, parseInt(day), h, parseInt(minutes));
-            } else {
-              punchDatetime = new Date(rawDate);
-            }
-          } else {
-            punchDatetime = new Date(rawDate);
-          }
+          const punchDatetime = parsePunchDate(rawDate);
           
           return {
             employeeCode,
-            punchDatetime: format(punchDatetime, "yyyy-MM-dd'T'HH:mm:ssXXX"),
+            punchDatetime: punchDatetime ? format(punchDatetime, "yyyy-MM-dd'T'HH:mm:ssXXX") : "",
           };
-        }).filter(p => p.employeeCode && p.punchDatetime && p.punchDatetime !== "Invalid Date");
+        }).filter(p => p.employeeCode && p.punchDatetime);
 
         if (mapped.length === 0) throw new Error("لم يتم العثور على سجلات بصمة صالحة. تأكد من وجود أعمدة (ID, Clock In)");
         await importPunches.mutateAsync(mapped);
