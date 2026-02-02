@@ -228,8 +228,8 @@ export async function registerRoutes(
             const shiftStartParts = currentShiftStart.split(':');
             const shiftStartHour = parseInt(shiftStartParts[0]);
             const shiftStartMin = parseInt(shiftStartParts[1]);
-            // Local shift time for this date
-            const shiftStartUTC = new Date(Date.UTC(
+            // Local shift time for this date (kept in local-date space)
+            const shiftStartLocal = new Date(Date.UTC(
               d.getUTCFullYear(),
               d.getUTCMonth(),
               d.getUTCDate(),
@@ -237,11 +237,12 @@ export async function registerRoutes(
               shiftStartMin,
               0
             ));
-            // Adjust to UTC based on client timezone
-            shiftStartUTC.setTime(shiftStartUTC.getTime() + safeOffsetMinutes * 60 * 1000);
+            const checkInLocal = checkIn
+              ? new Date(checkIn.getTime() - safeOffsetMinutes * 60 * 1000)
+              : null;
 
-            if (!activeAdj && checkIn) {
-              const diffMs = checkIn.getTime() - shiftStartUTC.getTime();
+            if (!activeAdj && checkInLocal) {
+              const diffMs = checkInLocal.getTime() - shiftStartLocal.getTime();
               const lateMinutes = Math.max(0, Math.ceil(diffMs / (1000 * 60)));
               if (diffMs > 15 * 60 * 1000) {
                 status = "Late";
