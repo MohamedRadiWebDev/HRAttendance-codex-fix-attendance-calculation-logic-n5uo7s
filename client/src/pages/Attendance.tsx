@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Sidebar } from "@/components/Sidebar";
 import { Header } from "@/components/Header";
@@ -18,6 +18,7 @@ export default function Attendance() {
   const [dateRange, setDateRange] = useState<{ start?: string; end?: string }>({});
   const [dateInput, setDateInput] = useState({ start: "", end: "" });
   const [employeeFilter, setEmployeeFilter] = useState("");
+  const hasInitialized = useRef(false);
   
   const [page, setPage] = useState(1);
   const limit = 0;
@@ -65,6 +66,7 @@ export default function Attendance() {
       start: formatDisplayDate(nextStart),
       end: formatDisplayDate(nextEnd),
     });
+    hasInitialized.current = true;
   }, [location]);
 
   useEffect(() => {
@@ -75,6 +77,15 @@ export default function Attendance() {
     localStorage.setItem("attendanceStartDate", dateRange.start);
     localStorage.setItem("attendanceEndDate", dateRange.end);
     setLocation(`/attendance?${params.toString()}`, { replace: true });
+  }, [dateRange, setLocation]);
+
+  useEffect(() => {
+    if (!hasInitialized.current) return;
+    if (!dateRange.start && !dateRange.end) {
+      localStorage.removeItem("attendanceStartDate");
+      localStorage.removeItem("attendanceEndDate");
+      setLocation("/attendance", { replace: true });
+    }
   }, [dateRange, setLocation]);
 
   const sectors = Array.from(new Set(employees?.map(e => e.sector).filter(Boolean) || []));
@@ -128,6 +139,10 @@ export default function Attendance() {
                     onChange={e => {
                       const value = e.target.value;
                       setDateInput(prev => ({ ...prev, start: value }));
+                      if (!value) {
+                        setDateRange(prev => ({ ...prev, start: undefined }));
+                        return;
+                      }
                       const parsed = parseDateInput(value);
                       if (parsed) {
                         setDateRange(prev => ({ ...prev, start: format(parsed, "yyyy-MM-dd") }));
@@ -143,6 +158,10 @@ export default function Attendance() {
                     onChange={e => {
                       const value = e.target.value;
                       setDateInput(prev => ({ ...prev, end: value }));
+                      if (!value) {
+                        setDateRange(prev => ({ ...prev, end: undefined }));
+                        return;
+                      }
                       const parsed = parseDateInput(value);
                       if (parsed) {
                         setDateRange(prev => ({ ...prev, end: format(parsed, "yyyy-MM-dd") }));

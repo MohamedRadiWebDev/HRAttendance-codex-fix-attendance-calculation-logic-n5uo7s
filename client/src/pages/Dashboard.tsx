@@ -7,7 +7,7 @@ import { useAttendanceRecords } from "@/hooks/use-attendance";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { useEmployees } from "@/hooks/use-employees";
 import { format, parse } from "date-fns";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444'];
@@ -16,6 +16,7 @@ export default function Dashboard() {
   const { data: employees } = useEmployees();
   const [dateInput, setDateInput] = useState({ start: "", end: "" });
   const [dateRange, setDateRange] = useState<{ start?: string; end?: string }>({});
+  const hasInitialized = useRef(false);
 
   const parseDateInput = (value: string) => {
     if (!value) return null;
@@ -36,6 +37,7 @@ export default function Dashboard() {
         end: format(new Date(storedEnd), "dd/MM/yyyy"),
       });
     }
+    hasInitialized.current = true;
   }, []);
 
   const { data: attendanceData } = useAttendanceRecords(
@@ -53,6 +55,14 @@ export default function Dashboard() {
     if (!dateRange.start || !dateRange.end) return;
     localStorage.setItem("attendanceStartDate", dateRange.start);
     localStorage.setItem("attendanceEndDate", dateRange.end);
+  }, [dateRange]);
+
+  useEffect(() => {
+    if (!hasInitialized.current) return;
+    if (!dateRange.start && !dateRange.end) {
+      localStorage.removeItem("attendanceStartDate");
+      localStorage.removeItem("attendanceEndDate");
+    }
   }, [dateRange]);
 
   const todayRecords = (attendanceData as any)?.data || [];
@@ -100,6 +110,10 @@ export default function Dashboard() {
                     onChange={(e) => {
                       const value = e.target.value;
                       setDateInput(prev => ({ ...prev, start: value }));
+                      if (!value) {
+                        setDateRange(prev => ({ ...prev, start: undefined }));
+                        return;
+                      }
                       const parsed = parseDateInput(value);
                       if (parsed) {
                         setDateRange(prev => ({ ...prev, start: format(parsed, "yyyy-MM-dd") }));
@@ -115,6 +129,10 @@ export default function Dashboard() {
                     onChange={(e) => {
                       const value = e.target.value;
                       setDateInput(prev => ({ ...prev, end: value }));
+                      if (!value) {
+                        setDateRange(prev => ({ ...prev, end: undefined }));
+                        return;
+                      }
                       const parsed = parseDateInput(value);
                       if (parsed) {
                         setDateRange(prev => ({ ...prev, end: format(parsed, "yyyy-MM-dd") }));
