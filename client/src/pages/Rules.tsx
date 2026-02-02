@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { Header } from "@/components/Header";
 import { Button } from "@/components/ui/button";
@@ -89,27 +89,9 @@ function AddRuleDialog() {
   const { toast } = useToast();
   const createRule = useCreateRule();
   const { data: employees } = useEmployees();
-  const [selectedSector, setSelectedSector] = useState("");
-  const [selectedDepartment, setSelectedDepartment] = useState("");
   
   const sectors = Array.from(new Set(employees?.map(e => e.sector).filter(Boolean) || []));
-  const departments = useMemo(() => {
-    return Array.from(
-      new Set(
-        employees
-          ?.filter(emp => (selectedSector ? emp.sector === selectedSector : true))
-          .map(emp => emp.department)
-          .filter(Boolean) || []
-      )
-    );
-  }, [employees, selectedSector]);
-  const filteredEmployees = useMemo(() => {
-    return employees?.filter(emp => {
-      if (selectedSector && emp.sector !== selectedSector) return false;
-      if (selectedDepartment && emp.department !== selectedDepartment) return false;
-      return true;
-    }) || [];
-  }, [employees, selectedSector, selectedDepartment]);
+  const departments = Array.from(new Set(employees?.map(e => e.department).filter(Boolean) || []));
   
   const form = useForm({
     resolver: zodResolver(insertRuleSchema),
@@ -290,57 +272,6 @@ function AddRuleDialog() {
 
                     {scopeType === 'emp' && (
                       <div className="mt-2">
-                        <div className="grid grid-cols-2 gap-2 mb-2">
-                          <Select
-                            onValueChange={(val) => {
-                              setSelectedSector(val);
-                              setSelectedDepartment("");
-                            }}
-                            value={selectedSector}
-                          >
-                            <FormControl>
-                              <SelectTrigger><SelectValue placeholder="اختر القطاع" /></SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              {sectors.map(s => (
-                                <SelectItem key={s} value={s as string}>{s}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-
-                          <Select
-                            onValueChange={(val) => setSelectedDepartment(val)}
-                            value={selectedDepartment}
-                          >
-                            <FormControl>
-                              <SelectTrigger><SelectValue placeholder="اختر الإدارة" /></SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              {departments.map(d => (
-                                <SelectItem key={d} value={d as string}>{d}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <Select
-                          onValueChange={(val) => {
-                            const existing = field.value.replace('emp:', '').split(',').map(v => v.trim()).filter(Boolean);
-                            if (!existing.includes(val)) {
-                              field.onChange(`emp:${[...existing, val].join(',')}`);
-                            }
-                          }}
-                        >
-                          <FormControl>
-                            <SelectTrigger><SelectValue placeholder="اختر الموظف لإضافته" /></SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            {filteredEmployees.map(emp => (
-                              <SelectItem key={emp.code} value={emp.code}>
-                                {emp.code} - {emp.nameAr}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
                         <Input 
                           placeholder="اكتب الأكواد: 101,102" 
                           value={field.value.replace('emp:', '')}

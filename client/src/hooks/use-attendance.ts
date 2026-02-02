@@ -42,12 +42,10 @@ export function useProcessAttendance() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ startDate, endDate }: { startDate: string; endDate: string }) => {
-      // Send the local timezone offset so the server can align local-day computations
-      const timezoneOffsetMinutes = new Date().getTimezoneOffset();
       const res = await fetch(api.attendance.process.path, {
         method: api.attendance.process.method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ startDate, endDate, timezoneOffsetMinutes }),
+        body: JSON.stringify({ startDate, endDate }),
       });
       if (!res.ok) throw new Error("Failed to process attendance");
       return api.attendance.process.responses[200].parse(await res.json());

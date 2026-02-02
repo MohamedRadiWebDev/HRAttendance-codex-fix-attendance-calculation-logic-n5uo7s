@@ -55,13 +55,6 @@ export default function Dashboard() {
     localStorage.setItem("attendanceEndDate", dateRange.end);
   }, [dateRange]);
 
-  useEffect(() => {
-    if (!dateRange.start && !dateRange.end) {
-      localStorage.removeItem("attendanceStartDate");
-      localStorage.removeItem("attendanceEndDate");
-    }
-  }, [dateRange]);
-
   const todayRecords = (attendanceData as any)?.data || [];
   const presentCount = todayRecords.filter((r: any) => r.status === "Present" || r.status === "Late").length;
   const lateCount = todayRecords.filter((r: any) => r.status === "Late").length;
@@ -107,10 +100,6 @@ export default function Dashboard() {
                     onChange={(e) => {
                       const value = e.target.value;
                       setDateInput(prev => ({ ...prev, start: value }));
-                      if (!value) {
-                        setDateRange(prev => ({ ...prev, start: undefined }));
-                        return;
-                      }
                       const parsed = parseDateInput(value);
                       if (parsed) {
                         setDateRange(prev => ({ ...prev, start: format(parsed, "yyyy-MM-dd") }));
@@ -126,10 +115,6 @@ export default function Dashboard() {
                     onChange={(e) => {
                       const value = e.target.value;
                       setDateInput(prev => ({ ...prev, end: value }));
-                      if (!value) {
-                        setDateRange(prev => ({ ...prev, end: undefined }));
-                        return;
-                      }
                       const parsed = parseDateInput(value);
                       if (parsed) {
                         setDateRange(prev => ({ ...prev, end: format(parsed, "yyyy-MM-dd") }));
