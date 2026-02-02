@@ -139,7 +139,7 @@ export async function registerRoutes(
   });
 
   app.post(api.attendance.process.path, async (req, res) => {
-    const { startDate, endDate } = req.body;
+    const { startDate, endDate, timezoneOffsetMinutes } = req.body;
     try {
       const safeOffsetMinutes = Number.isFinite(Number(timezoneOffsetMinutes))
         ? Number(timezoneOffsetMinutes)
