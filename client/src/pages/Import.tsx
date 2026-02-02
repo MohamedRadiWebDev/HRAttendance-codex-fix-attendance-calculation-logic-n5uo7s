@@ -161,9 +161,13 @@ export default function Import() {
         if (punchDates.length > 0) {
           const minDate = new Date(Math.min(...punchDates.map(date => date.getTime())));
           const maxDate = new Date(Math.max(...punchDates.map(date => date.getTime())));
+          const startRange = format(minDate, "yyyy-MM-dd");
+          const endRange = format(maxDate, "yyyy-MM-dd");
+          localStorage.setItem("attendanceStartDate", startRange);
+          localStorage.setItem("attendanceEndDate", endRange);
           await processAttendance.mutateAsync({
-            startDate: format(minDate, "yyyy-MM-dd"),
-            endDate: format(maxDate, "yyyy-MM-dd"),
+            startDate: startRange,
+            endDate: endRange,
           });
         }
       }
