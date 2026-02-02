@@ -176,7 +176,7 @@ export async function registerRoutes(
 
       for (const employee of allEmployees) {
         for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-          const dateStr = formatDate(d);
+          const dateStr = formatDateLocal(d);
           
           // 1. Get applicable rules for this employee and date
           const activeRules = rules.filter(r => {
