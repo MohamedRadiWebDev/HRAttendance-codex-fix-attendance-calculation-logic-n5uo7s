@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { Header } from "@/components/Header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Trash2, Settings2, ShieldCheck } from "lucide-react";
-import { useRules, useDeleteRule, useCreateRule } from "@/hooks/use-data";
+import { Plus, Trash2, Settings2, ShieldCheck, Download, Upload, Pencil } from "lucide-react";
+import { useRules, useDeleteRule, useCreateRule, useUpdateRule } from "@/hooks/use-data";
 import { useEmployees } from "@/hooks/use-employees";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
@@ -15,20 +15,56 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useForm } from "react-hook-form";
 import { format, parse } from "date-fns";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertRuleSchema, RULE_TYPES } from "@shared/schema";
+import { insertRuleSchema, RULE_TYPES, type SpecialRule } from "@shared/schema";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 
 export default function Rules() {
   const { data: rules, isLoading } = useRules();
   const deleteRule = useDeleteRule();
   const { toast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [editingRule, setEditingRule] = useState<SpecialRule | null>(null);
 
   const handleDelete = async (id: number) => {
+    if (!confirm("هل أنت متأكد من حذف هذه القاعدة؟")) return;
     try {
       await deleteRule.mutateAsync(id);
       toast({ title: "نجاح", description: "تم حذف القاعدة بنجاح" });
     } catch (err: any) {
       toast({ title: "خطأ", description: err.message, variant: "destructive" });
     }
+  };
+
+  const handleExport = () => {
+    if (!rules) return;
+    const blob = new Blob([JSON.stringify(rules, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `attendance_rules_${format(new Date(), "yyyyMMdd")}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const content = JSON.parse(event.target?.result as string);
+        // Clean IDs before importing
+        const rulesToImport = content.map(({ id, ...rest }: any) => rest);
+        await apiRequest("POST", "/api/rules/import", rulesToImport);
+        queryClient.invalidateQueries({ queryKey: ["/api/rules"] });
+        toast({ title: "نجاح", description: "تم استيراد القواعد بنجاح" });
+      } catch (err: any) {
+        toast({ title: "خطأ", description: "فشل استيراد القواعد. تأكد من صحة الملف.", variant: "destructive" });
+      }
+    };
+    reader.readAsText(file);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   return (
@@ -40,7 +76,18 @@ export default function Rules() {
           <div className="max-w-6xl mx-auto space-y-6">
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-bold font-display">إدارة القواعد الخاصة</h2>
-              <AddRuleDialog />
+              <div className="flex gap-2">
+                <input type="file" ref={fileInputRef} onChange={handleImport} className="hidden" accept=".json" />
+                <Button variant="outline" onClick={() => fileInputRef.current?.click()} className="gap-2">
+                  <Upload className="w-4 h-4" />
+                  استيراد
+                </Button>
+                <Button variant="outline" onClick={handleExport} className="gap-2">
+                  <Download className="w-4 h-4" />
+                  تصدير
+                </Button>
+                <AddRuleDialog />
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -68,6 +115,7 @@ export default function Rules() {
                         <Button variant="ghost" size="icon" onClick={() => handleDelete(rule.id)} className="text-destructive hover:text-destructive hover:bg-destructive/10">
                           <Trash2 className="w-4 h-4" />
                         </Button>
+                        <AddRuleDialog rule={rule} />
                         <Button variant="ghost" size="icon" onClick={() => toast({ title: "معلومات", description: "فحص حالة القاعدة وتطبيقها" })}>
                           <ShieldCheck className="w-4 h-4 text-primary" />
                         </Button>
@@ -84,10 +132,11 @@ export default function Rules() {
   );
 }
 
-function AddRuleDialog() {
+function AddRuleDialog({ rule }: { rule?: SpecialRule }) {
   const [open, setOpen] = useState(false);
   const { toast } = useToast();
   const createRule = useCreateRule();
+  const updateRule = useUpdateRule();
   const { data: employees } = useEmployees();
   const [selectedSector, setSelectedSector] = useState("");
   const [selectedDepartment, setSelectedDepartment] = useState("");
@@ -113,7 +162,15 @@ function AddRuleDialog() {
   
   const form = useForm({
     resolver: zodResolver(insertRuleSchema),
-    defaultValues: {
+    defaultValues: rule ? {
+      name: rule.name,
+      priority: rule.priority || 0,
+      scope: rule.scope,
+      startDate: format(new Date(rule.startDate), "dd/MM/yyyy"),
+      endDate: format(new Date(rule.endDate), "dd/MM/yyyy"),
+      ruleType: rule.ruleType,
+      params: rule.params
+    } : {
       name: "",
       priority: 0,
       scope: "all",
@@ -127,8 +184,14 @@ function AddRuleDialog() {
   const onSubmit = (data: any) => {
     const parseDateInput = (value: string) => {
       if (!value) return null;
-      const parsed = parse(value, "dd/MM/yyyy", new Date());
-      if (!Number.isNaN(parsed.getTime())) return parsed;
+      const parts = value.split("/");
+      if (parts.length === 3) {
+        const d = parseInt(parts[0]);
+        const m = parseInt(parts[1]) - 1;
+        const y = parseInt(parts[2]);
+        const date = new Date(y, m, d);
+        if (!isNaN(date.getTime())) return date;
+      }
       const fallback = new Date(value);
       if (!Number.isNaN(fallback.getTime())) return fallback;
       return null;
@@ -140,30 +203,47 @@ function AddRuleDialog() {
       return;
     }
 
-    createRule.mutate({
+    const payload = {
       ...data,
       startDate: format(startDate, "yyyy-MM-dd"),
       endDate: format(endDate, "yyyy-MM-dd"),
-    }, {
-      onSuccess: () => {
-        toast({ title: "نجاح", description: "تمت إضافة القاعدة بنجاح" });
-        setOpen(false);
-        form.reset();
-      }
-    });
+    };
+
+    if (rule) {
+      updateRule.mutate({ id: rule.id, rule: payload }, {
+        onSuccess: () => {
+          toast({ title: "نجاح", description: "تم تحديث القاعدة بنجاح" });
+          setOpen(false);
+        }
+      });
+    } else {
+      createRule.mutate(payload, {
+        onSuccess: () => {
+          toast({ title: "نجاح", description: "تمت إضافة القاعدة بنجاح" });
+          setOpen(false);
+          form.reset();
+        }
+      });
+    }
   };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button className="gap-2">
-          <Plus className="w-4 h-4" />
-          إضافة قاعدة جديدة
-        </Button>
+        {rule ? (
+          <Button variant="ghost" size="icon" className="text-primary hover:text-primary hover:bg-primary/10">
+            <Pencil className="w-4 h-4" />
+          </Button>
+        ) : (
+          <Button className="gap-2">
+            <Plus className="w-4 h-4" />
+            إضافة قاعدة جديدة
+          </Button>
+        )}
       </DialogTrigger>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
-          <DialogTitle>إضافة قاعدة جديدة</DialogTitle>
+          <DialogTitle>{rule ? "تعديل القاعدة" : "إضافة قاعدة جديدة"}</DialogTitle>
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-4">
@@ -373,8 +453,8 @@ function AddRuleDialog() {
               </div>
             )}
 
-            <Button type="submit" className="w-full" disabled={createRule.isPending}>
-              {createRule.isPending ? "جاري الحفظ..." : "حفظ القاعدة"}
+            <Button type="submit" className="w-full" disabled={createRule.isPending || updateRule.isPending}>
+              {createRule.isPending || updateRule.isPending ? "جاري الحفظ..." : "حفظ القاعدة"}
             </Button>
           </form>
         </Form>

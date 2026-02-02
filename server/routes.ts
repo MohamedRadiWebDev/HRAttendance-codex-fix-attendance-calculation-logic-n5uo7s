@@ -101,6 +101,29 @@ export async function registerRoutes(
     res.status(204).end();
   });
 
+  app.put(api.rules.update.path, async (req, res) => {
+    try {
+      const input = api.rules.update.input.parse(req.body);
+      const rule = await storage.updateRule(Number(req.params.id), input);
+      res.json(rule);
+    } catch (err) {
+      res.status(400).json({ message: "Invalid input" });
+    }
+  });
+
+  app.post("/api/rules/import", async (req, res) => {
+    try {
+      const rules = z.array(insertRuleSchema).parse(req.body);
+      const results = [];
+      for (const rule of rules) {
+        results.push(await storage.createRule(rule));
+      }
+      res.json({ message: "Imported rules", count: results.length });
+    } catch (err) {
+      res.status(400).json({ message: "Invalid rule format" });
+    }
+  });
+
   // Adjustments
   app.get(api.adjustments.list.path, async (req, res) => {
     const adjustments = await storage.getAdjustments();

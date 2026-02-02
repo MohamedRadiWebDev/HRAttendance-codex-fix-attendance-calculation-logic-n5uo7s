@@ -41,6 +41,23 @@ export function useDeleteRule() {
   });
 }
 
+export function useUpdateRule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, rule }: { id: number; rule: Partial<InsertSpecialRule> }) => {
+      const url = buildUrl(api.rules.update.path, { id });
+      const res = await fetch(url, {
+        method: api.rules.update.method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(rule),
+      });
+      if (!res.ok) throw new Error("Failed to update rule");
+      return api.rules.update.responses[200].parse(await res.json());
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.rules.list.path] }),
+  });
+}
+
 export function useAdjustments() {
   return useQuery({
     queryKey: [api.adjustments.list.path],

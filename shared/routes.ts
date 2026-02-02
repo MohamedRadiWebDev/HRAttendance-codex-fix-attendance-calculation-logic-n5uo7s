@@ -103,6 +103,15 @@ export const api = {
       responses: {
         204: z.void(),
       },
+    },
+    update: {
+      method: 'PUT' as const,
+      path: '/api/rules/:id',
+      input: insertRuleSchema.partial(),
+      responses: {
+        200: z.custom<typeof specialRules.$inferSelect>(),
+        404: errorSchemas.notFound,
+      },
     }
   },
   adjustments: {

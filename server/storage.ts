@@ -25,6 +25,7 @@ export interface IStorage {
   // Rules
   getRules(): Promise<SpecialRule[]>;
   createRule(rule: InsertSpecialRule): Promise<SpecialRule>;
+  updateRule(id: number, rule: Partial<InsertSpecialRule>): Promise<SpecialRule>;
   deleteRule(id: number): Promise<void>;
 
   // Adjustments
@@ -104,6 +105,11 @@ export class DatabaseStorage implements IStorage {
 
   async createRule(insertRule: InsertSpecialRule): Promise<SpecialRule> {
     const [rule] = await db.insert(specialRules).values(insertRule).returning();
+    return rule;
+  }
+
+  async updateRule(id: number, update: Partial<InsertSpecialRule>): Promise<SpecialRule> {
+    const [rule] = await db.update(specialRules).set(update).where(eq(specialRules.id, id)).returning();
     return rule;
   }
 
