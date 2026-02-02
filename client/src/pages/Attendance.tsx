@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Sidebar } from "@/components/Sidebar";
 import { Header } from "@/components/Header";
@@ -18,6 +18,7 @@ export default function Attendance() {
   const [dateRange, setDateRange] = useState<{ start?: string; end?: string }>({});
   const [dateInput, setDateInput] = useState({ start: "", end: "" });
   const [employeeFilter, setEmployeeFilter] = useState("");
+  const hasInitialized = useRef(false);
   
   const [page, setPage] = useState(1);
   const limit = 0;
@@ -65,6 +66,7 @@ export default function Attendance() {
       start: formatDisplayDate(nextStart),
       end: formatDisplayDate(nextEnd),
     });
+    hasInitialized.current = true;
   }, [location]);
 
   useEffect(() => {
@@ -78,6 +80,7 @@ export default function Attendance() {
   }, [dateRange, setLocation]);
 
   useEffect(() => {
+    if (!hasInitialized.current) return;
     if (!dateRange.start && !dateRange.end) {
       localStorage.removeItem("attendanceStartDate");
       localStorage.removeItem("attendanceEndDate");
