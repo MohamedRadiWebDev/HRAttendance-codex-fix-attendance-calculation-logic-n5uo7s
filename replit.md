@@ -47,13 +47,6 @@ Preferred communication style: Simple, everyday language.
 2. **Template-Based Excel Processing**: Flexible column mapping system allows different Excel formats for attendance data import
 3. **Rule Priority System**: Special rules have priority levels and scopes (all employees, department-specific, individual) for flexible attendance policy configuration
 4. **Typed API Layer**: Route definitions include input/output Zod schemas for end-to-end type safety
-5. **Timezone-Aware Attendance Processing**: Client sends timezoneOffsetMinutes with attendance processing requests so the server computes shift start times and day boundaries correctly in the user's local timezone, preventing incorrect lateness detection caused by UTC conversions
-
-### Date Handling
-- **Date Input Format**: The UI accepts dd/MM/yyyy format for user convenience
-- **Date Persistence**: Attendance page date ranges are persisted to localStorage and URL query params
-- **Timezone-Aware Imports**: Punch timestamps are formatted with timezone information (yyyy-MM-dd'T'HH:mm:ssXXX) during import
-- **Safe Pagination**: Attendance queries handle unbounded pagination (limit <= 0 skips DB pagination)
 
 ## External Dependencies
 
