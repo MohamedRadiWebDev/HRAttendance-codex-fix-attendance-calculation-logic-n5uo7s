@@ -93,6 +93,7 @@ export default function Attendance() {
   }, [dateRange.start, dateRange.end, employeeFilter, sectorFilter]);
 
   const handleProcess = () => {
+    if (!dateRange.start || !dateRange.end) return;
     processAttendance.mutate({ startDate: dateRange.start, endDate: dateRange.end }, {
       onSuccess: (data: any) => {
         toast({ title: "اكتملت المعالجة", description: data.message });
