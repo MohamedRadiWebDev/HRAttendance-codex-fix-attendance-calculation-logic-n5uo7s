@@ -8,7 +8,7 @@ import * as XLSX from 'xlsx';
 import { useImportEmployees, useImportPunches } from "@/hooks/use-employees";
 import { useProcessAttendance } from "@/hooks/use-attendance";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { format, parse, isValid } from "date-fns";
+import { format, parse, parseISO, isValid } from "date-fns";
 
 export default function Import() {
   const { toast } = useToast();
@@ -23,10 +23,28 @@ export default function Import() {
     if (rawDate instanceof Date) {
       return isValid(rawDate) ? rawDate : null;
     }
+    if (typeof rawDate === "number" && Number.isFinite(rawDate)) {
+      const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+      const parsed = new Date(excelEpoch.getTime() + rawDate * 24 * 60 * 60 * 1000);
+      return isValid(parsed) ? parsed : null;
+    }
     if (typeof rawDate === "string") {
-      const parsed = parse(rawDate.trim(), "dd/MM/yyyy HH:mm", new Date());
-      if (isValid(parsed)) return parsed;
-      const fallback = new Date(rawDate);
+      const trimmed = rawDate.trim();
+      const formats = [
+        "dd/MM/yyyy HH:mm:ss",
+        "dd/MM/yyyy HH:mm",
+        "dd/MM/yyyy",
+        "yyyy-MM-dd HH:mm:ss",
+        "yyyy-MM-dd HH:mm",
+        "yyyy-MM-dd",
+      ];
+      for (const fmt of formats) {
+        const parsed = parse(trimmed, fmt, new Date());
+        if (isValid(parsed)) return parsed;
+      }
+      const iso = parseISO(trimmed);
+      if (isValid(iso)) return iso;
+      const fallback = new Date(trimmed);
       return isValid(fallback) ? fallback : null;
     }
     const fallback = new Date(rawDate as any);
