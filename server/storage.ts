@@ -175,8 +175,8 @@ export class DatabaseStorage implements IStorage {
     const safeOffset = safeLimit > 0 && Number.isFinite(offset) && offset > 0 ? offset : 0;
 
     const data = safeLimit > 0 
-      ? await dataQuery.limit(safeLimit).offset(safeOffset)
-      : await dataQuery;
+      ? await baseQuery.limit(safeLimit).offset(safeOffset)
+      : await baseQuery;
 
     return { data, total: Number(countResult?.count || 0) };
   }
