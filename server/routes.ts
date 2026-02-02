@@ -145,7 +145,7 @@ export async function registerRoutes(
         ? Number(timezoneOffsetMinutes)
         : 0;
       const toLocal = (date: Date) => new Date(date.getTime() - offsetMinutes * 60 * 1000);
-      const formatDate = (date: Date) => {
+      const formatLocalDate = (date: Date) => {
         const local = toLocal(date);
         const year = local.getUTCFullYear();
         const month = String(local.getUTCMonth() + 1).padStart(2, "0");
@@ -162,20 +162,14 @@ export async function registerRoutes(
       const allEmployees = await storage.getEmployees();
       
       // Compute punch fetch bounds in UTC using local day boundaries
-      const punchStart = new Date(startDate);
-      const punchEnd = new Date(endDate);
-      const punchStartUtc = Date.UTC(
-        punchStart.getUTCFullYear(),
-        punchStart.getUTCMonth(),
-        punchStart.getUTCDate()
-      ) + offsetMinutes * 60 * 1000;
-      const punchEndUtc = Date.UTC(
-        punchEnd.getUTCFullYear(),
-        punchEnd.getUTCMonth(),
-        punchEnd.getUTCDate()
-      ) + offsetMinutes * 60 * 1000 + (24 * 60 * 60 * 1000 - 1);
-      punchStart.setTime(punchStartUtc);
-      punchEnd.setTime(punchEndUtc);
+      const [startYear, startMonth, startDay] = startDate.split("-").map(Number);
+      const [endYear, endMonth, endDay] = endDate.split("-").map(Number);
+      const punchStart = new Date(
+        Date.UTC(startYear, startMonth - 1, startDay, 0, 0, 0, 0) + offsetMinutes * 60 * 1000
+      );
+      const punchEnd = new Date(
+        Date.UTC(endYear, endMonth - 1, endDay, 23, 59, 59, 999) + offsetMinutes * 60 * 1000
+      );
       const punches = await storage.getPunches(punchStart, punchEnd);
       const rules = await storage.getRules();
       const adjustments = await storage.getAdjustments();
@@ -183,18 +177,8 @@ export async function registerRoutes(
       let processedCount = 0;
       
       // Iterate days in local-date space
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      const startLocal = new Date(Date.UTC(
-        start.getUTCFullYear(),
-        start.getUTCMonth(),
-        start.getUTCDate()
-      ));
-      const endLocal = new Date(Date.UTC(
-        end.getUTCFullYear(),
-        end.getUTCMonth(),
-        end.getUTCDate()
-      ));
+      const startLocal = new Date(Date.UTC(startYear, startMonth - 1, startDay));
+      const endLocal = new Date(Date.UTC(endYear, endMonth - 1, endDay));
 
       for (const employee of allEmployees) {
         for (let d = new Date(startLocal); d <= endLocal; d.setUTCDate(d.getUTCDate() + 1)) {
@@ -233,7 +217,7 @@ export async function registerRoutes(
 
           const dayPunches = punches.filter(p => 
             p.employeeCode === employee.code && 
-            formatDate(p.punchDatetime) === dateStr
+            formatLocalDate(p.punchDatetime) === dateStr
           ).sort((a, b) => a.punchDatetime.getTime() - b.punchDatetime.getTime());
 
           if (dayPunches.length > 0 || activeAdj) {
@@ -250,16 +234,19 @@ export async function registerRoutes(
             const shiftStartParts = currentShiftStart.split(':');
             const shiftStartHour = parseInt(shiftStartParts[0]);
             const shiftStartMin = parseInt(shiftStartParts[1]);
-            const shiftStartUtc = Date.UTC(
+            const shiftStartLocal = new Date(Date.UTC(
               d.getUTCFullYear(),
               d.getUTCMonth(),
               d.getUTCDate(),
               shiftStartHour,
               shiftStartMin,
               0
-            ) + offsetMinutes * 60 * 1000;
+            ));
+            const checkInLocal = checkIn ? toLocal(checkIn) : null;
             if (!activeAdj && checkIn) {
-              const diffMs = checkIn.getTime() - shiftStartUtc;
+              const diffMs = checkInLocal
+                ? checkInLocal.getTime() - shiftStartLocal.getTime()
+                : 0;
               const lateMinutes = Math.max(0, Math.ceil(diffMs / (1000 * 60)));
               if (diffMs > 15 * 60 * 1000) {
                 status = "Late";
