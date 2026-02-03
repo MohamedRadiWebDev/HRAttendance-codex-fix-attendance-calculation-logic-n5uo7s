@@ -12,7 +12,7 @@ import Rules from "@/pages/Rules";
 import Templates from "@/pages/Templates";
 import Adjustments from "@/pages/Adjustments";
 import BulkAdjustmentsImport from "@/pages/BulkAdjustmentsImport";
-import FingerprintExceptions from "@/pages/FingerprintExceptions";
+import MidnightLinks from "@/pages/MidnightLinks";
 
 function Router() {
   return (
@@ -25,7 +25,7 @@ function Router() {
       <Route path="/templates" component={Templates} />
       <Route path="/adjustments" component={Adjustments} />
       <Route path="/bulk-adjustments" component={BulkAdjustmentsImport} />
-      <Route path="/fingerprint-exceptions" component={FingerprintExceptions} />
+      <Route path="/midnight-links" component={MidnightLinks} />
       <Route component={NotFound} />
     </Switch>
   );

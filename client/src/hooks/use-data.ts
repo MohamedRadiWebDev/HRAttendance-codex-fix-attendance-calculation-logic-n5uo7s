@@ -109,56 +109,67 @@ export function useImportAdjustments() {
   });
 }
 
-export function useFingerprintExceptions(filters?: {
+export function useMidnightPunches(filters?: {
   startDate?: string;
   endDate?: string;
   employeeCode?: string;
   sector?: string;
-  department?: string;
-  type?: string;
+  branch?: string;
 }) {
   return useQuery({
-    queryKey: [api.fingerprintExceptions.scan.path, filters],
+    queryKey: [api.midnightLinks.list.path, filters],
     queryFn: async () => {
       const queryParams = new URLSearchParams();
       if (filters?.startDate) queryParams.append("startDate", filters.startDate);
       if (filters?.endDate) queryParams.append("endDate", filters.endDate);
       if (filters?.employeeCode) queryParams.append("employeeCode", filters.employeeCode);
       if (filters?.sector) queryParams.append("sector", filters.sector);
-      if (filters?.department) queryParams.append("department", filters.department);
-      if (filters?.type) queryParams.append("type", filters.type);
+      if (filters?.branch) queryParams.append("branch", filters.branch);
       const url = queryParams.toString()
-        ? `${api.fingerprintExceptions.scan.path}?${queryParams.toString()}`
-        : api.fingerprintExceptions.scan.path;
+        ? `${api.midnightLinks.list.path}?${queryParams.toString()}`
+        : api.midnightLinks.list.path;
       const res = await fetch(url);
-      if (!res.ok) throw new Error("Failed to fetch exceptions");
-      return api.fingerprintExceptions.scan.responses[200].parse(await res.json());
+      if (!res.ok) throw new Error("Failed to fetch midnight punches");
+      return api.midnightLinks.list.responses[200].parse(await res.json());
     },
   });
 }
 
-export function useFingerprintExceptionAction() {
+export function useMidnightLinkAction() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (payload: {
-      exceptionKey: string;
-      action: "carryback" | "overnight" | "ignore";
       employeeCode: string;
-      type: string;
-      baseDate?: string | null;
-      startDate?: string | null;
-      endDate?: string | null;
-      punchDetails?: any;
+      punchDateTime: string;
+      action: "previous_day_checkout" | "current_day_checkin" | "ignore";
+      targetBaseDate?: string | null;
+      note?: string | null;
     }) => {
-      const res = await fetch(api.fingerprintExceptions.action.path, {
-        method: api.fingerprintExceptions.action.method,
+      const res = await fetch(api.midnightLinks.action.path, {
+        method: api.midnightLinks.action.method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error("Failed to apply action");
-      return api.fingerprintExceptions.action.responses[200].parse(await res.json());
+      if (!res.ok) throw new Error("Failed to apply link action");
+      return api.midnightLinks.action.responses[200].parse(await res.json());
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.fingerprintExceptions.scan.path] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.midnightLinks.list.path] }),
+  });
+}
+
+export function useImportMidnightLinks() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (data: { rows: Array<Record<string, string | number | null>> }) => {
+      const res = await fetch(api.midnightLinks.import.path, {
+        method: api.midnightLinks.import.method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error("Failed to import midnight links");
+      return api.midnightLinks.import.responses[200].parse(await res.json());
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.midnightLinks.list.path] }),
   });
 }
 

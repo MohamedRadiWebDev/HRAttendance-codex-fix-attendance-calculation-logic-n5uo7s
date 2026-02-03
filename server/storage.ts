@@ -5,8 +5,7 @@ import {
   specialRules, type SpecialRule, type InsertSpecialRule,
   adjustments, type Adjustment, type InsertAdjustment,
   attendanceRecords, type AttendanceRecord, type InsertAttendanceRecord,
-  fingerprintExceptions, type FingerprintException, type InsertFingerprintException,
-  overtimeOverrides, type OvertimeOverride, type InsertOvertimeOverride
+  midnightLinks, type MidnightLink, type InsertMidnightLink
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, gte, lte, inArray, sql, desc } from "drizzle-orm";
@@ -56,13 +55,10 @@ export interface IStorage {
   updateAttendanceRecord(id: number, record: Partial<InsertAttendanceRecord>): Promise<AttendanceRecord>;
   getAttendanceRecord(employeeCode: string, date: string): Promise<AttendanceRecord | undefined>;
 
-  // Fingerprint exceptions
-  getFingerprintExceptionsByKeys(keys: string[]): Promise<FingerprintException[]>;
-  upsertFingerprintException(exception: InsertFingerprintException): Promise<FingerprintException>;
-
-  // Overtime overrides
-  getOvertimeOverrides(startDate: string, endDate: string): Promise<OvertimeOverride[]>;
-  createOvertimeOverride(override: InsertOvertimeOverride): Promise<OvertimeOverride>;
+  // Midnight links
+  getMidnightLinksByDateRange(startDate: string, endDate: string, employeeCode?: string): Promise<MidnightLink[]>;
+  upsertMidnightLink(link: InsertMidnightLink): Promise<MidnightLink>;
+  createMidnightLinksBulk(links: InsertMidnightLink[]): Promise<MidnightLink[]>;
   
   // Bulk operations for import
   createEmployeesBulk(employees: InsertEmployee[]): Promise<Employee[]>;
@@ -75,8 +71,7 @@ export interface IStorage {
 export class DatabaseStorage implements IStorage {
   async wipeAllData(): Promise<void> {
     await db.delete(attendanceRecords);
-    await db.delete(fingerprintExceptions);
-    await db.delete(overtimeOverrides);
+    await db.delete(midnightLinks);
     await db.delete(adjustments);
     await db.delete(specialRules);
     await db.delete(biometricPunches);
@@ -305,37 +300,47 @@ export class DatabaseStorage implements IStorage {
     return record;
   }
 
-  // Fingerprint exceptions
-  async getFingerprintExceptionsByKeys(keys: string[]): Promise<FingerprintException[]> {
-    if (keys.length === 0) return [];
-    return await db.select().from(fingerprintExceptions).where(inArray(fingerprintExceptions.exceptionKey, keys));
+  // Midnight links
+  async getMidnightLinksByDateRange(startDate: string, endDate: string, employeeCode?: string): Promise<MidnightLink[]> {
+    const conditions = [gte(midnightLinks.punchDate, startDate), lte(midnightLinks.punchDate, endDate)];
+    if (employeeCode) {
+      conditions.push(eq(midnightLinks.employeeCode, employeeCode));
+    }
+    return await db.select().from(midnightLinks).where(and(...conditions));
   }
 
-  async upsertFingerprintException(insertException: InsertFingerprintException): Promise<FingerprintException> {
-    const [exception] = await db.insert(fingerprintExceptions)
-      .values(insertException)
+  async upsertMidnightLink(insertLink: InsertMidnightLink): Promise<MidnightLink> {
+    const [link] = await db.insert(midnightLinks)
+      .values(insertLink)
       .onConflictDoUpdate({
-        target: fingerprintExceptions.exceptionKey,
+        target: [midnightLinks.employeeCode, midnightLinks.punchDateTime],
         set: {
-          status: insertException.status,
-          confirmedBy: insertException.confirmedBy ?? null,
-          confirmedAt: insertException.confirmedAt ?? null,
+          targetBaseDate: insertLink.targetBaseDate ?? null,
+          linkType: insertLink.linkType ?? null,
+          status: insertLink.status,
+          note: insertLink.note ?? null,
+          updatedAt: new Date(),
         },
       })
       .returning();
-    return exception;
+    return link;
   }
 
-  // Overtime overrides
-  async getOvertimeOverrides(startDate: string, endDate: string): Promise<OvertimeOverride[]> {
-    return await db.select()
-      .from(overtimeOverrides)
-      .where(and(gte(overtimeOverrides.baseDate, startDate), lte(overtimeOverrides.baseDate, endDate)));
-  }
-
-  async createOvertimeOverride(insertOverride: InsertOvertimeOverride): Promise<OvertimeOverride> {
-    const [override] = await db.insert(overtimeOverrides).values(insertOverride).returning();
-    return override;
+  async createMidnightLinksBulk(insertLinks: InsertMidnightLink[]): Promise<MidnightLink[]> {
+    if (insertLinks.length === 0) return [];
+    return await db.insert(midnightLinks)
+      .values(insertLinks)
+      .onConflictDoUpdate({
+        target: [midnightLinks.employeeCode, midnightLinks.punchDateTime],
+        set: {
+          targetBaseDate: sql`excluded.target_base_date`,
+          linkType: sql`excluded.link_type`,
+          status: sql`excluded.status`,
+          note: sql`excluded.note`,
+          updatedAt: sql`excluded.updated_at`,
+        },
+      })
+      .returning();
   }
 
   // Bulk

@@ -167,14 +167,48 @@ export const computePenaltyEntries = ({
 export const computeOvertimeHours = ({
   shiftEnd,
   checkOutSeconds,
+  nextDayShiftStart = "09:00",
 }: {
   shiftEnd: string;
   checkOutSeconds: number | null;
+  nextDayShiftStart?: string;
 }) => {
   if (checkOutSeconds === null) return 0;
   const shiftEndSeconds = timeStringToSeconds(shiftEnd);
   const overtimeStartSeconds = shiftEndSeconds + 60 * 60;
-  if (checkOutSeconds <= overtimeStartSeconds) return 0;
-  const eligibleMinutes = Math.floor((checkOutSeconds - overtimeStartSeconds) / 60);
+  const nextDayShiftStartSeconds = 24 * 60 * 60 + timeStringToSeconds(nextDayShiftStart);
+  const effectiveCheckOutSeconds = Math.min(checkOutSeconds, nextDayShiftStartSeconds);
+  if (effectiveCheckOutSeconds <= overtimeStartSeconds) return 0;
+  const eligibleMinutes = Math.floor((effectiveCheckOutSeconds - overtimeStartSeconds) / 60);
   return Math.floor(eligibleMinutes / 60);
 };
+
+export const computeCheckInOutWithLinks = ({
+  dayPunches,
+  linkedPunches,
+}: {
+  dayPunches: Date[];
+  linkedPunches: Date[];
+}) => {
+  const sortedPunches = [...dayPunches].sort((a, b) => a.getTime() - b.getTime());
+  const checkIn = sortedPunches.length > 0 ? sortedPunches[0] : null;
+  const checkOutCandidates = [
+    ...sortedPunches.slice(sortedPunches.length > 0 ? 1 : 0),
+    ...linkedPunches,
+  ];
+  const checkOut = checkOutCandidates.length > 0
+    ? checkOutCandidates.sort((a, b) => a.getTime() - b.getTime())[checkOutCandidates.length - 1]
+    : null;
+  return { checkIn, checkOut };
+};
+
+export const filterLinkedPunches = ({
+  dayPunches,
+  linkedKeys,
+  employeeCode,
+}: {
+  dayPunches: { punchDatetime: Date; employeeCode: string }[];
+  linkedKeys: Set<string>;
+  employeeCode: string;
+}) =>
+  dayPunches.filter((punch) => !linkedKeys.has(`${employeeCode}__${punch.punchDatetime.toISOString()}`));
