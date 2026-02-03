@@ -2,8 +2,7 @@ import { useMemo, useState } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { Header } from "@/components/Header";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Briefcase, Plus, FileText, CheckCircle2, Search } from "lucide-react";
+import { Plus, FileText, CheckCircle2, Search } from "lucide-react";
 import { useAdjustments, useCreateAdjustment } from "@/hooks/use-data";
 import { useEmployees } from "@/hooks/use-employees";
 import { Badge } from "@/components/ui/badge";
@@ -54,8 +53,10 @@ export default function Adjustments() {
                   <tr>
                     <th className="px-6 py-4 font-bold text-slate-600">كود الموظف</th>
                     <th className="px-6 py-4 font-bold text-slate-600">النوع</th>
-                    <th className="px-6 py-4 font-bold text-slate-600">من تاريخ</th>
-                    <th className="px-6 py-4 font-bold text-slate-600">إلى تاريخ</th>
+                    <th className="px-6 py-4 font-bold text-slate-600">التاريخ</th>
+                    <th className="px-6 py-4 font-bold text-slate-600">من</th>
+                    <th className="px-6 py-4 font-bold text-slate-600">إلى</th>
+                    <th className="px-6 py-4 font-bold text-slate-600">المصدر</th>
                     <th className="px-6 py-4 font-bold text-slate-600">الحالة</th>
                     <th className="px-6 py-4 font-bold text-slate-600">الإجراءات</th>
                   </tr>
@@ -64,7 +65,7 @@ export default function Adjustments() {
                   {isLoading ? (
                     Array(5).fill(0).map((_, i) => (
                       <tr key={i} className="animate-pulse">
-                        <td colSpan={6} className="px-6 py-4 h-12 bg-slate-50/50"></td>
+                        <td colSpan={8} className="px-6 py-4 h-12 bg-slate-50/50"></td>
                       </tr>
                     ))
                   ) : filteredAdjustments?.map((adj) => (
@@ -79,11 +80,13 @@ export default function Adjustments() {
                       </td>
                       <td className="px-6 py-4">
                         <Badge variant="outline" className="capitalize">
-                          {adj.type === 'annual' ? 'إجازة سنوية' : adj.type === 'sick' ? 'إجازة مرضي' : adj.type === 'mission' ? 'مأمورية' : adj.type}
+                          {adj.type}
                         </Badge>
                       </td>
-                      <td className="px-6 py-4 text-muted-foreground">{adj.startDate}</td>
-                      <td className="px-6 py-4 text-muted-foreground">{adj.endDate}</td>
+                      <td className="px-6 py-4 text-muted-foreground">{adj.date}</td>
+                      <td className="px-6 py-4 text-muted-foreground font-mono">{adj.fromTime}</td>
+                      <td className="px-6 py-4 text-muted-foreground font-mono">{adj.toTime}</td>
+                      <td className="px-6 py-4 text-muted-foreground">{adj.source}</td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-1 text-emerald-600 text-sm font-medium">
                           <CheckCircle2 className="w-4 h-4" />
@@ -100,7 +103,7 @@ export default function Adjustments() {
                   ))}
                   {filteredAdjustments?.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-6 py-12 text-center text-muted-foreground">
+                      <td colSpan={8} className="px-6 py-12 text-center text-muted-foreground">
                         لا يوجد سجلات حالياً
                       </td>
                     </tr>
@@ -128,10 +131,12 @@ function AddAdjustmentDialog() {
     resolver: zodResolver(insertAdjustmentSchema),
     defaultValues: {
       employeeCode: "",
-      type: "annual",
-      startDate: "",
-      endDate: "",
-      notes: "",
+      type: "اذن صباحي",
+      date: "",
+      fromTime: "",
+      toTime: "",
+      source: "manual",
+      note: "",
     }
   });
   const departments = useMemo(() => {
@@ -162,17 +167,23 @@ function AddAdjustmentDialog() {
   };
 
   const onSubmit = (data: any) => {
-    const startDate = parseDateInput(data.startDate);
-    const endDate = parseDateInput(data.endDate);
-    if (!startDate || !endDate) {
+    const parsedDate = parseDateInput(data.date);
+    if (!parsedDate) {
       toast({ title: "خطأ", description: "يرجى إدخال تاريخ صحيح بصيغة dd/mm/yyyy", variant: "destructive" });
+      return;
+    }
+    const fromTime = normalizeTime(data.fromTime);
+    const toTime = normalizeTime(data.toTime);
+    if (timeToSeconds(fromTime) >= timeToSeconds(toTime)) {
+      toast({ title: "خطأ", description: "وقت البداية يجب أن يكون قبل النهاية", variant: "destructive" });
       return;
     }
 
     createAdjustment.mutate({
       ...data,
-      startDate: format(startDate, "yyyy-MM-dd"),
-      endDate: format(endDate, "yyyy-MM-dd"),
+      date: format(parsedDate, "yyyy-MM-dd"),
+      fromTime,
+      toTime,
     }, {
       onSuccess: () => {
         toast({ title: "تم الحفظ", description: "تم تسجيل الطلب بنجاح" });
@@ -291,11 +302,10 @@ function AddAdjustmentDialog() {
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value="annual">إجازة سنوية</SelectItem>
-                      <SelectItem value="sick">إجازة مرضي</SelectItem>
-                      <SelectItem value="unpaid">إجازة بدون مرتب</SelectItem>
-                      <SelectItem value="mission">مأمورية عمل</SelectItem>
-                      <SelectItem value="permission">إذن خروج</SelectItem>
+                      <SelectItem value="اذن صباحي">اذن صباحي</SelectItem>
+                      <SelectItem value="اذن مسائي">اذن مسائي</SelectItem>
+                      <SelectItem value="إجازة نص يوم">إجازة نص يوم</SelectItem>
+                      <SelectItem value="مأمورية">مأمورية</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage />
@@ -305,10 +315,10 @@ function AddAdjustmentDialog() {
             <div className="grid grid-cols-2 gap-4">
               <FormField
                 control={form.control}
-                name="startDate"
+                name="date"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>من تاريخ</FormLabel>
+                    <FormLabel>التاريخ</FormLabel>
                     <FormControl>
                       <Input type="text" placeholder="dd/mm/yyyy" {...field} />
                     </FormControl>
@@ -318,12 +328,12 @@ function AddAdjustmentDialog() {
               />
               <FormField
                 control={form.control}
-                name="endDate"
+                name="fromTime"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>إلى تاريخ</FormLabel>
+                    <FormLabel>من</FormLabel>
                     <FormControl>
-                      <Input type="text" placeholder="dd/mm/yyyy" {...field} />
+                      <Input type="text" placeholder="09:00" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -332,7 +342,20 @@ function AddAdjustmentDialog() {
             </div>
             <FormField
               control={form.control}
-              name="notes"
+              name="toTime"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>إلى</FormLabel>
+                  <FormControl>
+                    <Input type="text" placeholder="17:00" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="note"
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>ملاحظات</FormLabel>
@@ -352,3 +375,13 @@ function AddAdjustmentDialog() {
     </Dialog>
   );
 }
+
+const normalizeTime = (value: string) => {
+  const [hours = "0", minutes = "0", seconds = "0"] = value.split(":");
+  return `${String(Number(hours)).padStart(2, "0")}:${String(Number(minutes)).padStart(2, "0")}:${String(Number(seconds)).padStart(2, "0")}`;
+};
+
+const timeToSeconds = (value: string) => {
+  const [hours, minutes, seconds] = value.split(":").map(Number);
+  return hours * 3600 + minutes * 60 + seconds;
+};
