@@ -3,7 +3,8 @@ import type { Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
-import { insertEmployeeSchema, insertTemplateSchema, insertRuleSchema, insertAdjustmentSchema } from "@shared/schema";
+import { insertEmployeeSchema, insertTemplateSchema, insertRuleSchema, insertAdjustmentSchema, ADJUSTMENT_TYPES } from "@shared/schema";
+import { computeAdjustmentEffects, computeAutomaticNotes, normalizeTimeToHms, secondsToHms, timeStringToSeconds } from "./attendance-utils";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -126,7 +127,13 @@ export async function registerRoutes(
 
   // Adjustments
   app.get(api.adjustments.list.path, async (req, res) => {
-    const adjustments = await storage.getAdjustments();
+    const { startDate, endDate, employeeCode, type } = req.query;
+    const adjustments = await storage.getAdjustments({
+      startDate: startDate ? String(startDate) : undefined,
+      endDate: endDate ? String(endDate) : undefined,
+      employeeCode: employeeCode ? String(employeeCode) : undefined,
+      type: type ? String(type) : undefined,
+    });
     res.json(adjustments);
   });
 
@@ -135,6 +142,51 @@ export async function registerRoutes(
       const input = api.adjustments.create.input.parse(req.body);
       const adj = await storage.createAdjustment(input);
       res.status(201).json(adj);
+    } catch (err) {
+      res.status(400).json({ message: "Invalid input" });
+    }
+  });
+
+  app.post(api.adjustments.import.path, async (req, res) => {
+    try {
+      const { rows, sourceFileName } = api.adjustments.import.input.parse(req.body);
+      const employees = await storage.getEmployees();
+      const employeeCodes = new Set(employees.map((emp) => emp.code));
+      const allowedTypes = new Set(ADJUSTMENT_TYPES);
+
+      const invalid: { rowIndex: number; reason: string }[] = [];
+      const validRows = rows.filter((row: any) => {
+        if (!employeeCodes.has(row.employeeCode)) {
+          invalid.push({ rowIndex: row.rowIndex ?? 0, reason: "كود الموظف غير موجود" });
+          return false;
+        }
+        if (!allowedTypes.has(row.type)) {
+          invalid.push({ rowIndex: row.rowIndex ?? 0, reason: "نوع غير مسموح" });
+          return false;
+        }
+        const fromSeconds = timeStringToSeconds(row.fromTime);
+        const toSeconds = timeStringToSeconds(row.toTime);
+        if (fromSeconds >= toSeconds) {
+          invalid.push({ rowIndex: row.rowIndex ?? 0, reason: "وقت البداية يجب أن يكون قبل النهاية" });
+          return false;
+        }
+        return true;
+      }).map((row: any) => ({
+        employeeCode: row.employeeCode,
+        date: row.date,
+        type: row.type,
+        fromTime: normalizeTimeToHms(row.fromTime),
+        toTime: normalizeTimeToHms(row.toTime),
+        source: row.source || "excel",
+        sourceFileName: sourceFileName || row.sourceFileName || null,
+        importedAt: new Date(),
+        note: row.note || null,
+      }));
+
+      if (validRows.length > 0) {
+        await storage.createAdjustmentsBulk(validRows);
+      }
+      res.json({ inserted: validRows.length, invalid });
     } catch (err) {
       res.status(400).json({ message: "Invalid input" });
     }
@@ -200,6 +252,14 @@ export async function registerRoutes(
       const adjustments = await storage.getAdjustments();
       
       let processedCount = 0;
+
+      const adjustmentsByEmployeeDate = new Map<string, typeof adjustments>();
+      adjustments.forEach((adjustment) => {
+        const key = `${adjustment.employeeCode}__${adjustment.date}`;
+        const existing = adjustmentsByEmployeeDate.get(key) || [];
+        existing.push(adjustment);
+        adjustmentsByEmployeeDate.set(key, existing);
+      });
       
       // Iterate days in local-date space
       const startLocal = new Date(Date.UTC(startYear, startMonth - 1, startDay));
@@ -233,12 +293,8 @@ export async function registerRoutes(
             currentShiftEnd = (shiftRule.params as any).shiftEnd || currentShiftEnd;
           }
 
-          // 3. Check for leaves/adjustments
-          const activeAdj = adjustments.find(a => 
-            a.employeeCode === employee.code && 
-            dateStr >= a.startDate && 
-            dateStr <= a.endDate
-          );
+          // 3. Check for adjustments (excel + manual)
+          const dayAdjustments = adjustmentsByEmployeeDate.get(`${employee.code}__${dateStr}`) || [];
 
           // Get punches for this employee on this local day
           // A punch belongs to this day if its local time matches dateStr
@@ -253,53 +309,123 @@ export async function registerRoutes(
             return `${py}-${pm}-${pd}` === dateStr;
           }).sort((a, b) => a.punchDatetime.getTime() - b.punchDatetime.getTime());
 
-          if (dayPunches.length > 0 || activeAdj) {
+          if (dayPunches.length > 0 || dayAdjustments.length > 0) {
             const checkIn = dayPunches.length > 0 ? dayPunches[0].punchDatetime : null;
             const checkOut = dayPunches.length > 1 ? dayPunches[dayPunches.length - 1].punchDatetime : null;
-            
+
+            const checkInLocal = checkIn ? toLocal(checkIn) : null;
+            const checkOutLocal = checkOut ? toLocal(checkOut) : null;
+            const checkInSeconds = checkInLocal
+              ? checkInLocal.getUTCHours() * 3600 + checkInLocal.getUTCMinutes() * 60 + checkInLocal.getUTCSeconds()
+              : null;
+            const checkOutSeconds = checkOutLocal
+              ? checkOutLocal.getUTCHours() * 3600 + checkOutLocal.getUTCMinutes() * 60 + checkOutLocal.getUTCSeconds()
+              : null;
+
+            const adjustmentEffects = computeAdjustmentEffects({
+              shiftStart: currentShiftStart,
+              shiftEnd: currentShiftEnd,
+              adjustments: dayAdjustments.map((adj) => ({
+                type: adj.type,
+                fromTime: adj.fromTime,
+                toTime: adj.toTime,
+              })),
+              checkInSeconds,
+              checkOutSeconds,
+            });
+
+            const toUtcFromSeconds = (seconds: number) => {
+              const hours = Math.floor(seconds / 3600);
+              const minutes = Math.floor((seconds % 3600) / 60);
+              const secs = Math.floor(seconds % 60);
+              const shiftTimeUTC = new Date(Date.UTC(
+                d.getUTCFullYear(),
+                d.getUTCMonth(),
+                d.getUTCDate(),
+                hours,
+                minutes,
+                secs
+              ));
+              shiftTimeUTC.setTime(shiftTimeUTC.getTime() + offsetMinutes * 60 * 1000);
+              return shiftTimeUTC;
+            };
+
+            const effectiveShiftStartUTC = toUtcFromSeconds(adjustmentEffects.effectiveShiftStartSeconds);
+            const effectiveShiftEndUTC = toUtcFromSeconds(adjustmentEffects.effectiveShiftEndSeconds);
+            const missionStart = adjustmentEffects.missionStartSeconds !== null
+              ? secondsToHms(adjustmentEffects.missionStartSeconds)
+              : null;
+            const missionEnd = adjustmentEffects.missionEndSeconds !== null
+              ? secondsToHms(adjustmentEffects.missionEndSeconds)
+              : null;
+
+            const firstStampSeconds = adjustmentEffects.firstStampSeconds;
+            const lastStampSeconds = adjustmentEffects.lastStampSeconds;
             let totalHours = 0;
-            if (checkIn && checkOut) {
-              totalHours = (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
+            if (firstStampSeconds !== null && lastStampSeconds !== null) {
+              const firstStampUTC = toUtcFromSeconds(firstStampSeconds);
+              const lastStampUTC = toUtcFromSeconds(lastStampSeconds);
+              totalHours = (lastStampUTC.getTime() - firstStampUTC.getTime()) / (1000 * 60 * 60);
             }
 
-            let penalties = [];
-            let status = activeAdj ? "Excused" : "Present";
-            const shiftStartParts = currentShiftStart.split(':');
-            const shiftStartHour = parseInt(shiftStartParts[0]);
-            const shiftStartMin = parseInt(shiftStartParts[1]);
-            
-            // shiftStartLocal represents the shift start time in LOCAL time for this day
-            // We then convert it to UTC to compare with the punch UTC
-            const shiftStartUTC = new Date(Date.UTC(
-              d.getUTCFullYear(),
-              d.getUTCMonth(),
-              d.getUTCDate(),
-              shiftStartHour,
-              shiftStartMin,
-              0
-            ));
-            // Adjust shiftStartUTC to be actual UTC (reverse the local-to-UTC offset)
-            shiftStartUTC.setTime(shiftStartUTC.getTime() + offsetMinutes * 60 * 1000);
+            const penalties: any[] = [];
+            let status = "Present";
+            const graceMinutes = 15;
+            const suppressPenalties = adjustmentEffects.suppressPenalties;
+            const hasMission = adjustmentEffects.missionStartSeconds !== null && adjustmentEffects.missionEndSeconds !== null;
+            const halfDayExcused = adjustmentEffects.halfDayExcused;
+            const excusedByHalfDayNoPunch = halfDayExcused && !checkIn && !checkOut;
+            const excusedByMission = hasMission;
+            const excusedDay = excusedByHalfDayNoPunch || excusedByMission;
 
-            if (!activeAdj && checkIn) {
-              const diffMs = checkIn.getTime() - shiftStartUTC.getTime();
+            if (!suppressPenalties && checkIn) {
+              const diffMs = checkIn.getTime() - effectiveShiftStartUTC.getTime();
               const lateMinutes = Math.max(0, Math.ceil(diffMs / (1000 * 60)));
-              
-              if (diffMs > 15 * 60 * 1000) {
+
+              if (diffMs > graceMinutes * 60 * 1000) {
                 status = "Late";
                 let latePenalty = 0;
                 if (lateMinutes > 60) latePenalty = 1;
                 else if (lateMinutes > 30) latePenalty = 0.5;
                 else latePenalty = 0.25;
-                
+
                 penalties.push({ type: "تأخير", value: latePenalty, minutes: lateMinutes });
               } else {
                 status = "Present";
               }
-            } else if (!activeAdj && !checkIn) {
+            } else if (!suppressPenalties && !checkIn && !excusedDay) {
               status = "Absent";
               penalties.push({ type: "غياب", value: 1 });
             }
+
+            if (!suppressPenalties && checkIn && checkOut) {
+              const diffMs = effectiveShiftEndUTC.getTime() - checkOut.getTime();
+              const earlyMinutes = Math.max(0, Math.ceil(diffMs / (1000 * 60)));
+              if (diffMs > graceMinutes * 60 * 1000) {
+                let earlyPenalty = 0;
+                if (earlyMinutes > 60) earlyPenalty = 1;
+                else if (earlyMinutes > 30) earlyPenalty = 0.5;
+                else earlyPenalty = 0.25;
+                penalties.push({ type: "انصراف مبكر", value: earlyPenalty, minutes: earlyMinutes });
+              }
+            }
+
+            if (excusedDay) {
+              status = hasMission && adjustmentEffects.missionEndSeconds !== null &&
+                adjustmentEffects.missionEndSeconds >= timeStringToSeconds(currentShiftEnd)
+                ? "Present"
+                : "Excused";
+            }
+
+            const earlyLeaveThreshold = effectiveShiftEndUTC.getTime() - graceMinutes * 60 * 1000;
+            const autoNotes = computeAutomaticNotes({
+              existingNotes: null,
+              checkInExists: Boolean(checkIn),
+              checkOutExists: Boolean(checkOut),
+              missingStampExcused: excusedDay,
+              earlyLeaveExcused: excusedDay,
+              checkOutBeforeEarlyLeave: Boolean(checkOut && checkOut.getTime() < earlyLeaveThreshold),
+            });
 
             await storage.createAttendanceRecord({
               employeeCode: employee.code,
@@ -310,7 +436,11 @@ export async function registerRoutes(
               status,
               overtimeHours: Math.max(0, totalHours - 8),
               penalties,
-              isOvernight: activeRules.some(r => r.ruleType === 'overtime_overnight')
+              isOvernight: activeRules.some(r => r.ruleType === 'overtime_overnight'),
+              notes: autoNotes || null,
+              missionStart,
+              missionEnd,
+              halfDayExcused,
             });
             processedCount++;
           } else {
@@ -324,7 +454,11 @@ export async function registerRoutes(
               status: "Absent",
               penalties: [{ type: "غياب", value: 1 }],
               overtimeHours: 0,
-              isOvernight: false
+              isOvernight: false,
+              notes: null,
+              missionStart: null,
+              missionEnd: null,
+              halfDayExcused: false,
             });
             processedCount++;
           }

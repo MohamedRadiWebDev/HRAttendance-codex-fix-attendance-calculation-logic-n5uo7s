@@ -82,11 +82,19 @@ export function useDeleteRule() {
 }
 
 // === ADJUSTMENTS ===
-export function useAdjustments() {
+export function useAdjustments(filters?: { startDate?: string; endDate?: string; employeeCode?: string; type?: string }) {
   return useQuery({
-    queryKey: [api.adjustments.list.path],
+    queryKey: [api.adjustments.list.path, filters],
     queryFn: async () => {
-      const res = await fetch(api.adjustments.list.path);
+      const queryParams = new URLSearchParams();
+      if (filters?.startDate) queryParams.append("startDate", filters.startDate);
+      if (filters?.endDate) queryParams.append("endDate", filters.endDate);
+      if (filters?.employeeCode) queryParams.append("employeeCode", filters.employeeCode);
+      if (filters?.type) queryParams.append("type", filters.type);
+      const url = queryParams.toString()
+        ? `${api.adjustments.list.path}?${queryParams.toString()}`
+        : api.adjustments.list.path;
+      const res = await fetch(url);
       if (!res.ok) throw new Error("Failed to fetch adjustments");
       return api.adjustments.list.responses[200].parse(await res.json());
     },
