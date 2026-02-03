@@ -118,6 +118,12 @@ export const api = {
     list: {
       method: 'GET' as const,
       path: '/api/adjustments',
+      input: z.object({
+        startDate: z.string().optional(),
+        endDate: z.string().optional(),
+        employeeCode: z.string().optional(),
+        type: z.string().optional(),
+      }).optional(),
       responses: {
         200: z.array(z.custom<typeof adjustments.$inferSelect>()),
       },
@@ -128,6 +134,34 @@ export const api = {
       input: insertAdjustmentSchema,
       responses: {
         201: z.custom<typeof adjustments.$inferSelect>(),
+      },
+    },
+    import: {
+      method: 'POST' as const,
+      path: '/api/adjustments/import',
+      input: z.object({
+        sourceFileName: z.string().optional(),
+        rows: z.array(z.object({
+          rowIndex: z.number().optional(),
+          employeeCode: z.string(),
+          date: z.string(),
+          type: z.string(),
+          fromTime: z.string(),
+          toTime: z.string(),
+          source: z.string().optional(),
+          sourceFileName: z.string().optional(),
+          note: z.string().nullable().optional(),
+        })),
+      }),
+      responses: {
+        200: z.object({
+          inserted: z.number(),
+          invalid: z.array(z.object({
+            rowIndex: z.number(),
+            reason: z.string(),
+          })),
+        }),
+        400: errorSchemas.validation,
       },
     },
   },
