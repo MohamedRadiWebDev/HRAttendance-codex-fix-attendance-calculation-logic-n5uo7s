@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Sidebar } from "@/components/Sidebar";
 import { Header } from "@/components/Header";
@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { RefreshCw, Download, Search } from "lucide-react";
 import { useAttendanceRecords, useProcessAttendance } from "@/hooks/use-attendance";
 import { useEmployees } from "@/hooks/use-employees";
+import { useAdjustments } from "@/hooks/use-data";
 import { format, startOfMonth, endOfMonth, parse } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
@@ -98,6 +99,23 @@ export default function Attendance() {
     }
     return true;
   });
+
+  const adjustmentFilters = {
+    startDate: dateRange.start && dateRange.end ? dateRange.start : undefined,
+    endDate: dateRange.start && dateRange.end ? dateRange.end : undefined,
+    employeeCode: employeeFilter.includes(",") ? undefined : employeeFilter || undefined,
+  };
+  const { data: adjustments } = useAdjustments(adjustmentFilters);
+  const adjustmentsByKey = useMemo(() => {
+    const map = new Map<string, any[]>();
+    (adjustments || []).forEach((adj) => {
+      const key = `${adj.employeeCode}__${adj.date}`;
+      const existing = map.get(key) || [];
+      existing.push(adj);
+      map.set(key, existing);
+    });
+    return map;
+  }, [adjustments]);
 
   useEffect(() => {
     setPage(1);
@@ -265,6 +283,18 @@ export default function Attendance() {
                                 ))}
                               </div>
                             )}
+                            {adjustmentsByKey.get(`${record.employeeCode}__${record.date}`)?.length ? (
+                              <div className="flex gap-1 flex-wrap">
+                                {adjustmentsByKey.get(`${record.employeeCode}__${record.date}`)?.map((adj, i) => (
+                                  <span key={i} className="px-2 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-bold">
+                                    {adj.type} ({adj.fromTime}-{adj.toTime})
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+                            {record.notes ? (
+                              <div className="text-[10px] text-slate-600 font-medium">{record.notes}</div>
+                            ) : null}
                             {record.status === "Excused" && (
                               <span className="text-[10px] text-emerald-600 font-medium italic">إذن مسجل</span>
                             )}

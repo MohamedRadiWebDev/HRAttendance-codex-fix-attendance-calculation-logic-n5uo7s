@@ -1,9 +1,10 @@
-import { pgTable, text, serial, integer, boolean, timestamp, jsonb, date, doublePrecision } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, jsonb, doublePrecision, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 // Enums
 export const LEAVE_TYPES = ["annual", "sick", "unpaid", "mission", "permission"] as const;
+export const ADJUSTMENT_TYPES = ["اذن صباحي", "اذن مسائي", "إجازة نص يوم", "مأمورية"] as const;
 export const RULE_TYPES = ["custom_shift", "attendance_exempt", "penalty_override", "ignore_biometric", "overtime_overnight"] as const;
 export const PENALTY_TYPES = ["late_arrival", "early_leave", "missing_stamp", "absence"] as const;
 
@@ -56,14 +57,31 @@ export const specialRules = pgTable("special_rules", {
   params: jsonb("params").notNull(),
 });
 
-export const adjustments = pgTable("adjustments", {
-  id: serial("id").primaryKey(),
-  employeeCode: text("employee_code").notNull(),
-  type: text("type", { enum: LEAVE_TYPES }).notNull(),
-  startDate: text("start_date").notNull(),
-  endDate: text("end_date").notNull(),
-  notes: text("notes"),
-});
+export const adjustments = pgTable(
+  "adjustments",
+  {
+    id: serial("id").primaryKey(),
+    employeeCode: text("employee_code").notNull(),
+    date: text("date").notNull(),
+    type: text("type", { enum: ADJUSTMENT_TYPES }).notNull(),
+    fromTime: text("from_time").notNull(),
+    toTime: text("to_time").notNull(),
+    source: text("source").notNull(),
+    sourceFileName: text("source_file_name"),
+    importedAt: timestamp("imported_at").defaultNow(),
+    note: text("note"),
+  },
+  (table) => ({
+    adjustmentUnique: uniqueIndex("adjustments_unique_idx").on(
+      table.employeeCode,
+      table.date,
+      table.type,
+      table.fromTime,
+      table.toTime,
+      table.source
+    ),
+  })
+);
 
 // Storing calculated attendance for performance/audit
 export const attendanceRecords = pgTable("attendance_records", {
@@ -77,6 +95,40 @@ export const attendanceRecords = pgTable("attendance_records", {
   status: text("status"), // Present, Absent, Late, etc.
   penalties: jsonb("penalties"), // Array of penalty objects
   isOvernight: boolean("is_overnight").default(false),
+  notes: text("notes"),
+  missionStart: text("mission_start"),
+  missionEnd: text("mission_end"),
+  halfDayExcused: boolean("half_day_excused").default(false),
+});
+
+export const fingerprintExceptions = pgTable("fingerprint_exceptions", {
+  id: serial("id").primaryKey(),
+  exceptionKey: text("exception_key").notNull().unique(),
+  employeeCode: text("employee_code").notNull(),
+  type: text("type").notNull(),
+  baseDate: text("base_date"),
+  startDate: text("start_date"),
+  endDate: text("end_date"),
+  punchDetails: jsonb("punch_details"),
+  status: text("status").notNull().default("pending"),
+  detectedBy: text("detected_by").notNull().default("system"),
+  confirmedBy: text("confirmed_by"),
+  confirmedAt: timestamp("confirmed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const overtimeOverrides = pgTable("overtime_overrides", {
+  id: serial("id").primaryKey(),
+  employeeCode: text("employee_code").notNull(),
+  type: text("type").notNull(),
+  baseDate: text("base_date").notNull(),
+  checkOutDate: text("check_out_date").notNull(),
+  checkOutTime: text("check_out_time").notNull(),
+  sourceExceptionKey: text("source_exception_key"),
+  detectedBy: text("detected_by").notNull().default("system"),
+  confirmedBy: text("confirmed_by"),
+  confirmedAt: timestamp("confirmed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 export const auditLogs = pgTable("audit_logs", {
@@ -95,6 +147,8 @@ export const insertTemplateSchema = createInsertSchema(excelTemplates).omit({ id
 export const insertRuleSchema = createInsertSchema(specialRules).omit({ id: true });
 export const insertAdjustmentSchema = createInsertSchema(adjustments).omit({ id: true });
 export const insertAttendanceSchema = createInsertSchema(attendanceRecords).omit({ id: true });
+export const insertFingerprintExceptionSchema = createInsertSchema(fingerprintExceptions).omit({ id: true });
+export const insertOvertimeOverrideSchema = createInsertSchema(overtimeOverrides).omit({ id: true });
 
 // Types
 export type Employee = typeof employees.$inferSelect;
@@ -111,6 +165,12 @@ export type InsertAdjustment = z.infer<typeof insertAdjustmentSchema>;
 
 export type AttendanceRecord = typeof attendanceRecords.$inferSelect;
 export type InsertAttendanceRecord = z.infer<typeof insertAttendanceSchema>;
+
+export type FingerprintException = typeof fingerprintExceptions.$inferSelect;
+export type InsertFingerprintException = z.infer<typeof insertFingerprintExceptionSchema>;
+
+export type OvertimeOverride = typeof overtimeOverrides.$inferSelect;
+export type InsertOvertimeOverride = z.infer<typeof insertOvertimeOverrideSchema>;
 
 export type BiometricPunch = typeof biometricPunches.$inferSelect;
 export type InsertBiometricPunch = z.infer<typeof insertPunchSchema>;
