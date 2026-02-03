@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { insertEmployeeSchema, insertTemplateSchema, insertRuleSchema, insertAdjustmentSchema, ADJUSTMENT_TYPES } from "@shared/schema";
-import { computeAdjustmentEffects, computeAutomaticNotes, computePenaltyEntries, normalizeTimeToHms, secondsToHms, timeStringToSeconds } from "./attendance-utils";
+import { computeAdjustmentEffects, computeAutomaticNotes, computeOvertimeHours, computePenaltyEntries, normalizeTimeToHms, secondsToHms, timeStringToSeconds } from "./attendance-utils";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -432,6 +432,11 @@ export async function registerRoutes(
               checkOutBeforeEarlyLeave: Boolean(checkOut && checkOut.getTime() < earlyLeaveThreshold),
             });
 
+            const overtimeHours = computeOvertimeHours({
+              shiftEnd: currentShiftEnd,
+              checkOutSeconds,
+            });
+
             await storage.createAttendanceRecord({
               employeeCode: employee.code,
               date: dateStr,
@@ -439,7 +444,7 @@ export async function registerRoutes(
               checkOut,
               totalHours,
               status,
-              overtimeHours: Math.max(0, totalHours - 8),
+              overtimeHours,
               penalties,
               isOvernight: activeRules.some(r => r.ruleType === 'overtime_overnight'),
               notes: autoNotes || null,

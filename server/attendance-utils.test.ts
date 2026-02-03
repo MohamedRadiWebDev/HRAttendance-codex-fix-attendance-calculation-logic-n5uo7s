@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   computeAdjustmentEffects,
   computeAutomaticNotes,
+  computeOvertimeHours,
   computePenaltyEntries,
 } from "./attendance-utils";
 
@@ -138,6 +139,55 @@ const toSeconds = (value: string) => {
     earlyLeaveTriggered: true,
   });
   assert.deepEqual(penalties, []);
+})();
+
+(() => {
+  assert.equal(
+    computeOvertimeHours({ shiftEnd: "17:00", checkOutSeconds: 17 * 3600 + 59 * 60 }),
+    0
+  );
+})();
+
+(() => {
+  assert.equal(
+    computeOvertimeHours({ shiftEnd: "17:00", checkOutSeconds: 18 * 3600 }),
+    0
+  );
+})();
+
+(() => {
+  assert.equal(
+    computeOvertimeHours({ shiftEnd: "17:00", checkOutSeconds: 18 * 3600 + 59 * 60 }),
+    0
+  );
+})();
+
+(() => {
+  assert.equal(
+    computeOvertimeHours({ shiftEnd: "17:00", checkOutSeconds: 19 * 3600 }),
+    1
+  );
+})();
+
+(() => {
+  assert.equal(
+    computeOvertimeHours({ shiftEnd: "17:00", checkOutSeconds: 19 * 3600 + 5 * 60 }),
+    1
+  );
+})();
+
+(() => {
+  assert.equal(
+    computeOvertimeHours({ shiftEnd: "17:00", checkOutSeconds: 20 * 3600 + 10 * 60 }),
+    2
+  );
+})();
+
+(() => {
+  assert.equal(
+    computeOvertimeHours({ shiftEnd: "17:00", checkOutSeconds: 19 * 3600 }),
+    1
+  );
 })();
 
 console.log("attendance-utils tests passed");
