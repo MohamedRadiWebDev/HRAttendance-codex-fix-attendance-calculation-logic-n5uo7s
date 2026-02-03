@@ -58,11 +58,19 @@ export function useUpdateRule() {
   });
 }
 
-export function useAdjustments() {
+export function useAdjustments(filters?: { startDate?: string; endDate?: string; employeeCode?: string; type?: string }) {
   return useQuery({
-    queryKey: [api.adjustments.list.path],
+    queryKey: [api.adjustments.list.path, filters],
     queryFn: async () => {
-      const res = await fetch(api.adjustments.list.path);
+      const queryParams = new URLSearchParams();
+      if (filters?.startDate) queryParams.append("startDate", filters.startDate);
+      if (filters?.endDate) queryParams.append("endDate", filters.endDate);
+      if (filters?.employeeCode) queryParams.append("employeeCode", filters.employeeCode);
+      if (filters?.type) queryParams.append("type", filters.type);
+      const url = queryParams.toString()
+        ? `${api.adjustments.list.path}?${queryParams.toString()}`
+        : api.adjustments.list.path;
+      const res = await fetch(url);
       if (!res.ok) throw new Error("Failed to fetch adjustments");
       return api.adjustments.list.responses[200].parse(await res.json());
     },
@@ -80,6 +88,22 @@ export function useCreateAdjustment() {
       });
       if (!res.ok) throw new Error("Failed to create adjustment");
       return api.adjustments.create.responses[201].parse(await res.json());
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.adjustments.list.path] }),
+  });
+}
+
+export function useImportAdjustments() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (data: { sourceFileName?: string; rows: InsertAdjustment[] }) => {
+      const res = await fetch(api.adjustments.import.path, {
+        method: api.adjustments.import.method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error("Failed to import adjustments");
+      return api.adjustments.import.responses[200].parse(await res.json());
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.adjustments.list.path] }),
   });
