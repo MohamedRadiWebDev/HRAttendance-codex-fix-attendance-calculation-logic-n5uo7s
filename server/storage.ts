@@ -4,7 +4,9 @@ import {
   excelTemplates, type Template, type InsertTemplate,
   specialRules, type SpecialRule, type InsertSpecialRule,
   adjustments, type Adjustment, type InsertAdjustment,
-  attendanceRecords, type AttendanceRecord, type InsertAttendanceRecord
+  attendanceRecords, type AttendanceRecord, type InsertAttendanceRecord,
+  fingerprintExceptions, type FingerprintException, type InsertFingerprintException,
+  overtimeOverrides, type OvertimeOverride, type InsertOvertimeOverride
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, gte, lte, inArray, sql, desc } from "drizzle-orm";
@@ -53,6 +55,14 @@ export interface IStorage {
   createAttendanceRecord(record: InsertAttendanceRecord): Promise<AttendanceRecord>;
   updateAttendanceRecord(id: number, record: Partial<InsertAttendanceRecord>): Promise<AttendanceRecord>;
   getAttendanceRecord(employeeCode: string, date: string): Promise<AttendanceRecord | undefined>;
+
+  // Fingerprint exceptions
+  getFingerprintExceptionsByKeys(keys: string[]): Promise<FingerprintException[]>;
+  upsertFingerprintException(exception: InsertFingerprintException): Promise<FingerprintException>;
+
+  // Overtime overrides
+  getOvertimeOverrides(startDate: string, endDate: string): Promise<OvertimeOverride[]>;
+  createOvertimeOverride(override: InsertOvertimeOverride): Promise<OvertimeOverride>;
   
   // Bulk operations for import
   createEmployeesBulk(employees: InsertEmployee[]): Promise<Employee[]>;
@@ -65,6 +75,8 @@ export interface IStorage {
 export class DatabaseStorage implements IStorage {
   async wipeAllData(): Promise<void> {
     await db.delete(attendanceRecords);
+    await db.delete(fingerprintExceptions);
+    await db.delete(overtimeOverrides);
     await db.delete(adjustments);
     await db.delete(specialRules);
     await db.delete(biometricPunches);
@@ -291,6 +303,39 @@ export class DatabaseStorage implements IStorage {
       .from(attendanceRecords)
       .where(and(eq(attendanceRecords.employeeCode, employeeCode), eq(attendanceRecords.date, date)));
     return record;
+  }
+
+  // Fingerprint exceptions
+  async getFingerprintExceptionsByKeys(keys: string[]): Promise<FingerprintException[]> {
+    if (keys.length === 0) return [];
+    return await db.select().from(fingerprintExceptions).where(inArray(fingerprintExceptions.exceptionKey, keys));
+  }
+
+  async upsertFingerprintException(insertException: InsertFingerprintException): Promise<FingerprintException> {
+    const [exception] = await db.insert(fingerprintExceptions)
+      .values(insertException)
+      .onConflictDoUpdate({
+        target: fingerprintExceptions.exceptionKey,
+        set: {
+          status: insertException.status,
+          confirmedBy: insertException.confirmedBy ?? null,
+          confirmedAt: insertException.confirmedAt ?? null,
+        },
+      })
+      .returning();
+    return exception;
+  }
+
+  // Overtime overrides
+  async getOvertimeOverrides(startDate: string, endDate: string): Promise<OvertimeOverride[]> {
+    return await db.select()
+      .from(overtimeOverrides)
+      .where(and(gte(overtimeOverrides.baseDate, startDate), lte(overtimeOverrides.baseDate, endDate)));
+  }
+
+  async createOvertimeOverride(insertOverride: InsertOvertimeOverride): Promise<OvertimeOverride> {
+    const [override] = await db.insert(overtimeOverrides).values(insertOverride).returning();
+    return override;
   }
 
   // Bulk

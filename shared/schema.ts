@@ -101,6 +101,36 @@ export const attendanceRecords = pgTable("attendance_records", {
   halfDayExcused: boolean("half_day_excused").default(false),
 });
 
+export const fingerprintExceptions = pgTable("fingerprint_exceptions", {
+  id: serial("id").primaryKey(),
+  exceptionKey: text("exception_key").notNull().unique(),
+  employeeCode: text("employee_code").notNull(),
+  type: text("type").notNull(),
+  baseDate: text("base_date"),
+  startDate: text("start_date"),
+  endDate: text("end_date"),
+  punchDetails: jsonb("punch_details"),
+  status: text("status").notNull().default("pending"),
+  detectedBy: text("detected_by").notNull().default("system"),
+  confirmedBy: text("confirmed_by"),
+  confirmedAt: timestamp("confirmed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const overtimeOverrides = pgTable("overtime_overrides", {
+  id: serial("id").primaryKey(),
+  employeeCode: text("employee_code").notNull(),
+  type: text("type").notNull(),
+  baseDate: text("base_date").notNull(),
+  checkOutDate: text("check_out_date").notNull(),
+  checkOutTime: text("check_out_time").notNull(),
+  sourceExceptionKey: text("source_exception_key"),
+  detectedBy: text("detected_by").notNull().default("system"),
+  confirmedBy: text("confirmed_by"),
+  confirmedAt: timestamp("confirmed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const auditLogs = pgTable("audit_logs", {
   id: serial("id").primaryKey(),
   employeeCode: text("employee_code").notNull(),
@@ -117,6 +147,8 @@ export const insertTemplateSchema = createInsertSchema(excelTemplates).omit({ id
 export const insertRuleSchema = createInsertSchema(specialRules).omit({ id: true });
 export const insertAdjustmentSchema = createInsertSchema(adjustments).omit({ id: true });
 export const insertAttendanceSchema = createInsertSchema(attendanceRecords).omit({ id: true });
+export const insertFingerprintExceptionSchema = createInsertSchema(fingerprintExceptions).omit({ id: true });
+export const insertOvertimeOverrideSchema = createInsertSchema(overtimeOverrides).omit({ id: true });
 
 // Types
 export type Employee = typeof employees.$inferSelect;
@@ -133,6 +165,12 @@ export type InsertAdjustment = z.infer<typeof insertAdjustmentSchema>;
 
 export type AttendanceRecord = typeof attendanceRecords.$inferSelect;
 export type InsertAttendanceRecord = z.infer<typeof insertAttendanceSchema>;
+
+export type FingerprintException = typeof fingerprintExceptions.$inferSelect;
+export type InsertFingerprintException = z.infer<typeof insertFingerprintExceptionSchema>;
+
+export type OvertimeOverride = typeof overtimeOverrides.$inferSelect;
+export type InsertOvertimeOverride = z.infer<typeof insertOvertimeOverrideSchema>;
 
 export type BiometricPunch = typeof biometricPunches.$inferSelect;
 export type InsertBiometricPunch = z.infer<typeof insertPunchSchema>;

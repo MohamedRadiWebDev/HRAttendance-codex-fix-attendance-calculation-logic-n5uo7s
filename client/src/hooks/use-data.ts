@@ -109,6 +109,59 @@ export function useImportAdjustments() {
   });
 }
 
+export function useFingerprintExceptions(filters?: {
+  startDate?: string;
+  endDate?: string;
+  employeeCode?: string;
+  sector?: string;
+  department?: string;
+  type?: string;
+}) {
+  return useQuery({
+    queryKey: [api.fingerprintExceptions.scan.path, filters],
+    queryFn: async () => {
+      const queryParams = new URLSearchParams();
+      if (filters?.startDate) queryParams.append("startDate", filters.startDate);
+      if (filters?.endDate) queryParams.append("endDate", filters.endDate);
+      if (filters?.employeeCode) queryParams.append("employeeCode", filters.employeeCode);
+      if (filters?.sector) queryParams.append("sector", filters.sector);
+      if (filters?.department) queryParams.append("department", filters.department);
+      if (filters?.type) queryParams.append("type", filters.type);
+      const url = queryParams.toString()
+        ? `${api.fingerprintExceptions.scan.path}?${queryParams.toString()}`
+        : api.fingerprintExceptions.scan.path;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch exceptions");
+      return api.fingerprintExceptions.scan.responses[200].parse(await res.json());
+    },
+  });
+}
+
+export function useFingerprintExceptionAction() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: {
+      exceptionKey: string;
+      action: "carryback" | "overnight" | "ignore";
+      employeeCode: string;
+      type: string;
+      baseDate?: string | null;
+      startDate?: string | null;
+      endDate?: string | null;
+      punchDetails?: any;
+    }) => {
+      const res = await fetch(api.fingerprintExceptions.action.path, {
+        method: api.fingerprintExceptions.action.method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error("Failed to apply action");
+      return api.fingerprintExceptions.action.responses[200].parse(await res.json());
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.fingerprintExceptions.scan.path] }),
+  });
+}
+
 export function useTemplates() {
   return useQuery({
     queryKey: [api.templates.list.path],

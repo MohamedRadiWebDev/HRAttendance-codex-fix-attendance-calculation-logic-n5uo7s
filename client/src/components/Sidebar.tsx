@@ -16,6 +16,7 @@ const navigation = [
   { name: 'الحضور والانصراف', href: '/attendance', icon: CalendarCheck },
   { name: 'التسويات والإجازات', href: '/adjustments', icon: Briefcase },
   { name: 'رفع التعديلات', href: '/bulk-adjustments', icon: Upload },
+  { name: 'مراجعة البصمات بعد منتصف الليل / المبيت', href: '/fingerprint-exceptions', icon: CalendarCheck },
   { name: 'القواعد والورديات', href: '/rules', icon: Settings },
   { name: 'نماذج الاكسل', href: '/templates', icon: FileSpreadsheet },
   { name: 'استيراد بيانات', href: '/import', icon: Upload },

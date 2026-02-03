@@ -214,6 +214,219 @@ export async function registerRoutes(
     res.json({ data, total, page: safePage, limit: safeLimit });
   });
 
+  // Fingerprint Exceptions Review
+  app.get(api.fingerprintExceptions.scan.path, async (req, res) => {
+    const { startDate, endDate, employeeCode, sector, department, type, timezoneOffsetMinutes } = req.query;
+    const effectiveStart = startDate ? String(startDate) : "1970-01-01";
+    const effectiveEnd = endDate ? String(endDate) : "2099-12-31";
+    const thresholdAfterMidnight = 3 * 60 * 60;
+    const overnightThreshold = 7 * 60 * 60;
+    const anomalyThreshold = 6 * 60 * 60;
+    const offsetMinutes = Number.isFinite(Number(timezoneOffsetMinutes))
+      ? Number(timezoneOffsetMinutes)
+      : -120;
+
+    const employees = await storage.getEmployees();
+    const filteredEmployees = employees.filter((emp) => {
+      if (employeeCode && emp.code !== String(employeeCode)) return false;
+      if (sector && emp.sector !== String(sector)) return false;
+      if (department && emp.department !== String(department)) return false;
+      return true;
+    });
+    const employeeMap = new Map(filteredEmployees.map((emp) => [emp.code, emp]));
+
+    const [startYear, startMonth, startDay] = effectiveStart.split("-").map(Number);
+    const [endYear, endMonth, endDay] = effectiveEnd.split("-").map(Number);
+    const punchStart = new Date(Date.UTC(startYear, startMonth - 1, startDay, 0, 0, 0, 0));
+    const punchEnd = new Date(Date.UTC(endYear, endMonth - 1, endDay, 23, 59, 59, 999));
+    const punches = await storage.getPunches(punchStart, punchEnd);
+
+    const toLocal = (date: Date) => new Date(date.getTime() - offsetMinutes * 60 * 1000);
+    const punchesByEmployeeDate = new Map<string, { date: string; seconds: number; time: string; punch: Date }[]>();
+    punches.forEach((punch) => {
+      if (!employeeMap.has(punch.employeeCode)) return;
+      const localPunch = toLocal(punch.punchDatetime);
+      const year = localPunch.getUTCFullYear();
+      const month = String(localPunch.getUTCMonth() + 1).padStart(2, "0");
+      const day = String(localPunch.getUTCDate()).padStart(2, "0");
+      const dateStr = `${year}-${month}-${day}`;
+      if (dateStr < effectiveStart || dateStr > effectiveEnd) return;
+      const seconds = localPunch.getUTCHours() * 3600 + localPunch.getUTCMinutes() * 60 + localPunch.getUTCSeconds();
+      const time = `${String(localPunch.getUTCHours()).padStart(2, "0")}:${String(localPunch.getUTCMinutes()).padStart(2, "0")}:${String(localPunch.getUTCSeconds()).padStart(2, "0")}`;
+      const key = `${punch.employeeCode}__${dateStr}`;
+      const existing = punchesByEmployeeDate.get(key) || [];
+      existing.push({ date: dateStr, seconds, time, punch: localPunch });
+      punchesByEmployeeDate.set(key, existing);
+    });
+
+    const detections: any[] = [];
+    const allDates = Array.from(new Set(Array.from(punchesByEmployeeDate.values()).flatMap(items => items.map(item => item.date)))).sort();
+    const dateSet = new Set(allDates);
+
+    for (const emp of filteredEmployees) {
+      for (const dateStr of dateSet) {
+        const dayKey = `${emp.code}__${dateStr}`;
+        const dayPunches = (punchesByEmployeeDate.get(dayKey) || []).sort((a, b) => a.seconds - b.seconds);
+        if (dayPunches.length === 0) continue;
+        const nextDate = new Date(`${dateStr}T00:00:00Z`);
+        nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+        const nextDateStr = nextDate.toISOString().slice(0, 10);
+        const nextKey = `${emp.code}__${nextDateStr}`;
+        const nextPunches = (punchesByEmployeeDate.get(nextKey) || []).sort((a, b) => a.seconds - b.seconds);
+
+        if (nextPunches.length > 0) {
+          const afterMidnightPunches = nextPunches.filter(p => p.seconds <= thresholdAfterMidnight);
+          afterMidnightPunches.forEach((punch) => {
+            detections.push({
+              type: "خروج بعد 12",
+              employeeCode: emp.code,
+              employeeName: emp.nameAr,
+              baseDate: dateStr,
+              startDate: null,
+              endDate: null,
+              punchDetails: {
+                baseDate: dateStr,
+                punchDate: nextDateStr,
+                time: punch.time,
+              },
+            });
+          });
+        }
+
+        if (dayPunches.length === 1 && nextPunches.length > 0) {
+          const earliestNext = nextPunches[0];
+          if (earliestNext.seconds < overnightThreshold) {
+            detections.push({
+              type: "مبيت محتمل",
+              employeeCode: emp.code,
+              employeeName: emp.nameAr,
+              baseDate: null,
+              startDate: dateStr,
+              endDate: nextDateStr,
+              punchDetails: {
+                startDate: dateStr,
+                endDate: nextDateStr,
+                nextDayTime: earliestNext.time,
+              },
+            });
+          }
+        }
+
+        const previousDate = new Date(`${dateStr}T00:00:00Z`);
+        previousDate.setUTCDate(previousDate.getUTCDate() - 1);
+        const prevDateStr = previousDate.toISOString().slice(0, 10);
+        const prevPunches = (punchesByEmployeeDate.get(`${emp.code}__${prevDateStr}`) || []).sort((a, b) => a.seconds - b.seconds);
+        if (dayPunches[0]?.seconds < anomalyThreshold && prevPunches.length >= 2) {
+          detections.push({
+            type: "بصمة غير طبيعية",
+            employeeCode: emp.code,
+            employeeName: emp.nameAr,
+            baseDate: dateStr,
+            startDate: null,
+            endDate: null,
+            punchDetails: {
+              date: dateStr,
+              time: dayPunches[0].time,
+            },
+          });
+        }
+      }
+    }
+
+    const filteredDetections = detections.filter((item) => {
+      if (type && item.type !== String(type)) return false;
+      return true;
+    });
+
+    const withKeys = filteredDetections.map((item) => {
+      const key = [
+        item.employeeCode,
+        item.type,
+        item.baseDate || "",
+        item.startDate || "",
+        item.endDate || "",
+        JSON.stringify(item.punchDetails || {}),
+      ].join("|");
+      return { ...item, exceptionKey: key };
+    });
+
+    const existing = await storage.getFingerprintExceptionsByKeys(withKeys.map(item => item.exceptionKey));
+    const existingMap = new Map(existing.map((item) => [item.exceptionKey, item]));
+
+    res.json(withKeys.map((item) => {
+      const stored = existingMap.get(item.exceptionKey);
+      return {
+        exceptionKey: item.exceptionKey,
+        employeeCode: item.employeeCode,
+        employeeName: item.employeeName,
+        type: item.type,
+        baseDate: item.baseDate,
+        startDate: item.startDate,
+        endDate: item.endDate,
+        punchDetails: item.punchDetails,
+        status: stored?.status || "pending",
+        detectedBy: stored?.detectedBy || "system",
+        confirmedBy: stored?.confirmedBy || null,
+        confirmedAt: stored?.confirmedAt ? stored.confirmedAt.toISOString() : null,
+      };
+    }));
+  });
+
+  app.post(api.fingerprintExceptions.action.path, async (req, res) => {
+    const {
+      exceptionKey,
+      action,
+      confirmedBy,
+      employeeCode,
+      type,
+      baseDate,
+      startDate,
+      endDate,
+      punchDetails,
+    } = api.fingerprintExceptions.action.input.parse(req.body);
+
+    const existing = await storage.getFingerprintExceptionsByKeys([exceptionKey]);
+    const stored = existing[0];
+    const status = action === "ignore" ? "ignored" : "confirmed";
+
+    const exception = await storage.upsertFingerprintException({
+      exceptionKey,
+      employeeCode,
+      type,
+      baseDate: baseDate || null,
+      startDate: startDate || null,
+      endDate: endDate || null,
+      punchDetails: punchDetails ?? null,
+      status,
+      detectedBy: stored?.detectedBy || "system",
+      confirmedBy: confirmedBy || "HR",
+      confirmedAt: new Date(),
+      createdAt: stored?.createdAt || new Date(),
+    });
+
+    if (action === "carryback" || action === "overnight") {
+      const details = (exception.punchDetails || {}) as any;
+      const checkOutDate = action === "carryback" ? details?.punchDate : details?.endDate;
+      const checkOutTime = action === "carryback" ? details?.time : details?.nextDayTime;
+      if (checkOutDate && checkOutTime) {
+        await storage.createOvertimeOverride({
+          employeeCode: exception.employeeCode,
+          type: action,
+          baseDate: exception.baseDate || exception.startDate || "",
+          checkOutDate,
+          checkOutTime,
+          sourceExceptionKey: exception.exceptionKey,
+          detectedBy: exception.detectedBy || "system",
+          confirmedBy: confirmedBy || "HR",
+          confirmedAt: new Date(),
+          createdAt: new Date(),
+        });
+      }
+    }
+
+    res.json({ message: "Action applied" });
+  });
+
   app.post(api.attendance.process.path, async (req, res) => {
     const { startDate, endDate, timezoneOffsetMinutes } = req.body;
     try {
@@ -250,6 +463,7 @@ export async function registerRoutes(
       const punches = await storage.getPunches(searchStart, searchEnd);
       const rules = await storage.getRules();
       const adjustments = await storage.getAdjustments();
+      const overrides = await storage.getOvertimeOverrides(startDate, endDate);
       
       let processedCount = 0;
 
@@ -259,6 +473,14 @@ export async function registerRoutes(
         const existing = adjustmentsByEmployeeDate.get(key) || [];
         existing.push(adjustment);
         adjustmentsByEmployeeDate.set(key, existing);
+      });
+
+      const overridesByEmployeeDate = new Map<string, typeof overrides>();
+      overrides.forEach((override) => {
+        const key = `${override.employeeCode}__${override.baseDate}`;
+        const existing = overridesByEmployeeDate.get(key) || [];
+        existing.push(override);
+        overridesByEmployeeDate.set(key, existing);
       });
       
       // Iterate days in local-date space
@@ -432,9 +654,19 @@ export async function registerRoutes(
               checkOutBeforeEarlyLeave: Boolean(checkOut && checkOut.getTime() < earlyLeaveThreshold),
             });
 
+            const dayOverrides = overridesByEmployeeDate.get(`${employee.code}__${dateStr}`) || [];
+            const override = dayOverrides[0];
+            let overtimeCheckOutSeconds = checkOutSeconds;
+            if (override) {
+              const overrideSeconds = timeStringToSeconds(override.checkOutTime);
+              overtimeCheckOutSeconds = override.checkOutDate > dateStr
+                ? overrideSeconds + 24 * 60 * 60
+                : overrideSeconds;
+            }
+
             const overtimeHours = computeOvertimeHours({
               shiftEnd: currentShiftEnd,
-              checkOutSeconds,
+              checkOutSeconds: overtimeCheckOutSeconds,
             });
 
             await storage.createAttendanceRecord({

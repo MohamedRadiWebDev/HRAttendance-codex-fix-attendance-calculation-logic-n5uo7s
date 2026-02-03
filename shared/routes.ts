@@ -191,6 +191,54 @@ export const api = {
       },
     },
   },
+  fingerprintExceptions: {
+    scan: {
+      method: 'GET' as const,
+      path: '/api/fingerprint-exceptions/scan',
+      input: z.object({
+        startDate: z.string().optional(),
+        endDate: z.string().optional(),
+        employeeCode: z.string().optional(),
+        sector: z.string().optional(),
+        department: z.string().optional(),
+        type: z.string().optional(),
+      }).optional(),
+      responses: {
+        200: z.array(z.object({
+          exceptionKey: z.string(),
+          employeeCode: z.string(),
+          employeeName: z.string().nullable(),
+          type: z.string(),
+          baseDate: z.string().nullable(),
+          startDate: z.string().nullable(),
+          endDate: z.string().nullable(),
+          punchDetails: z.any(),
+          status: z.string(),
+          detectedBy: z.string(),
+          confirmedBy: z.string().nullable(),
+          confirmedAt: z.string().nullable(),
+        })),
+      },
+    },
+    action: {
+      method: 'POST' as const,
+      path: '/api/fingerprint-exceptions/action',
+      input: z.object({
+        exceptionKey: z.string(),
+        action: z.enum(["carryback", "overnight", "ignore"]),
+        employeeCode: z.string(),
+        type: z.string(),
+        baseDate: z.string().nullable().optional(),
+        startDate: z.string().nullable().optional(),
+        endDate: z.string().nullable().optional(),
+        punchDetails: z.any().optional(),
+        confirmedBy: z.string().optional(),
+      }),
+      responses: {
+        200: z.object({ message: z.string() }),
+      },
+    },
+  },
   import: {
     punches: {
       method: 'POST' as const,
