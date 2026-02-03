@@ -137,3 +137,29 @@ export const computeAutomaticNotes = ({
   }
   return appendNotes(existingNotes, notes);
 };
+
+export const computePenaltyEntries = ({
+  isExcused,
+  latePenaltyValue,
+  lateMinutes,
+  missingCheckout,
+  earlyLeaveTriggered,
+}: {
+  isExcused: boolean;
+  latePenaltyValue: number;
+  lateMinutes: number;
+  missingCheckout: boolean;
+  earlyLeaveTriggered: boolean;
+}) => {
+  if (isExcused) return [];
+  const entries: { type: string; value: number; minutes?: number }[] = [];
+  if (latePenaltyValue > 0) {
+    entries.push({ type: "تأخير", value: latePenaltyValue, minutes: lateMinutes });
+  }
+  if (missingCheckout) {
+    entries.push({ type: "سهو بصمة", value: 0.5 });
+  } else if (earlyLeaveTriggered) {
+    entries.push({ type: "انصراف مبكر", value: 0.5 });
+  }
+  return entries;
+};

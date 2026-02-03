@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   computeAdjustmentEffects,
   computeAutomaticNotes,
+  computePenaltyEntries,
 } from "./attendance-utils";
 
 const toSeconds = (value: string) => {
@@ -92,6 +93,51 @@ const toSeconds = (value: string) => {
     checkOutBeforeEarlyLeave: true,
   });
   assert.ok(notes.includes("انصراف مبكر"));
+})();
+
+(() => {
+  const penalties = computePenaltyEntries({
+    isExcused: false,
+    latePenaltyValue: 0.25,
+    lateMinutes: 10,
+    missingCheckout: true,
+    earlyLeaveTriggered: false,
+  });
+  const totalPenalty = penalties.reduce((sum, penalty) => sum + penalty.value, 0);
+  assert.equal(totalPenalty, 0.75);
+})();
+
+(() => {
+  const penalties = computePenaltyEntries({
+    isExcused: false,
+    latePenaltyValue: 0,
+    lateMinutes: 0,
+    missingCheckout: false,
+    earlyLeaveTriggered: true,
+  });
+  assert.deepEqual(penalties, [{ type: "انصراف مبكر", value: 0.5 }]);
+})();
+
+(() => {
+  const penalties = computePenaltyEntries({
+    isExcused: false,
+    latePenaltyValue: 0,
+    lateMinutes: 0,
+    missingCheckout: true,
+    earlyLeaveTriggered: true,
+  });
+  assert.deepEqual(penalties, [{ type: "سهو بصمة", value: 0.5 }]);
+})();
+
+(() => {
+  const penalties = computePenaltyEntries({
+    isExcused: true,
+    latePenaltyValue: 0.25,
+    lateMinutes: 20,
+    missingCheckout: true,
+    earlyLeaveTriggered: true,
+  });
+  assert.deepEqual(penalties, []);
 })();
 
 console.log("attendance-utils tests passed");

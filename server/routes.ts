@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { insertEmployeeSchema, insertTemplateSchema, insertRuleSchema, insertAdjustmentSchema, ADJUSTMENT_TYPES } from "@shared/schema";
-import { computeAdjustmentEffects, computeAutomaticNotes, normalizeTimeToHms, secondsToHms, timeStringToSeconds } from "./attendance-utils";
+import { computeAdjustmentEffects, computeAutomaticNotes, computePenaltyEntries, normalizeTimeToHms, secondsToHms, timeStringToSeconds } from "./attendance-utils";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -377,38 +377,45 @@ export async function registerRoutes(
             const excusedByHalfDayNoPunch = halfDayExcused && !checkIn && !checkOut;
             const excusedByMission = hasMission;
             const excusedDay = excusedByHalfDayNoPunch || excusedByMission;
+            const isExcusedForPenalties = excusedDay || suppressPenalties;
+            let latePenaltyValue = 0;
+            let lateMinutes = 0;
 
-            if (!suppressPenalties && checkIn) {
+            if (!isExcusedForPenalties && checkIn) {
               const diffMs = checkIn.getTime() - effectiveShiftStartUTC.getTime();
-              const lateMinutes = Math.max(0, Math.ceil(diffMs / (1000 * 60)));
+              lateMinutes = Math.max(0, Math.ceil(diffMs / (1000 * 60)));
 
               if (diffMs > graceMinutes * 60 * 1000) {
                 status = "Late";
-                let latePenalty = 0;
-                if (lateMinutes > 60) latePenalty = 1;
-                else if (lateMinutes > 30) latePenalty = 0.5;
-                else latePenalty = 0.25;
-
-                penalties.push({ type: "تأخير", value: latePenalty, minutes: lateMinutes });
+                if (lateMinutes > 60) latePenaltyValue = 1;
+                else if (lateMinutes > 30) latePenaltyValue = 0.5;
+                else latePenaltyValue = 0.25;
               } else {
                 status = "Present";
               }
-            } else if (!suppressPenalties && !checkIn && !excusedDay) {
+            } else if (!isExcusedForPenalties && !checkIn && !checkOut) {
               status = "Absent";
               penalties.push({ type: "غياب", value: 1 });
             }
 
-            if (!suppressPenalties && checkIn && checkOut) {
-              const diffMs = effectiveShiftEndUTC.getTime() - checkOut.getTime();
-              const earlyMinutes = Math.max(0, Math.ceil(diffMs / (1000 * 60)));
-              if (diffMs > graceMinutes * 60 * 1000) {
-                let earlyPenalty = 0;
-                if (earlyMinutes > 60) earlyPenalty = 1;
-                else if (earlyMinutes > 30) earlyPenalty = 0.5;
-                else earlyPenalty = 0.25;
-                penalties.push({ type: "انصراف مبكر", value: earlyPenalty, minutes: earlyMinutes });
-              }
-            }
+            const missingCheckout = Boolean(checkIn && !checkOut) && !isExcusedForPenalties;
+            const earlyLeaveThreshold = effectiveShiftEndUTC.getTime() - graceMinutes * 60 * 1000;
+            const earlyLeaveTriggered = Boolean(
+              checkOut &&
+              !missingCheckout &&
+              !isExcusedForPenalties &&
+              checkOut.getTime() < earlyLeaveThreshold
+            );
+
+            penalties.push(
+              ...computePenaltyEntries({
+                isExcused: isExcusedForPenalties,
+                latePenaltyValue,
+                lateMinutes,
+                missingCheckout,
+                earlyLeaveTriggered,
+              })
+            );
 
             if (excusedDay) {
               status = hasMission && adjustmentEffects.missionEndSeconds !== null &&
@@ -416,8 +423,6 @@ export async function registerRoutes(
                 ? "Present"
                 : "Excused";
             }
-
-            const earlyLeaveThreshold = effectiveShiftEndUTC.getTime() - graceMinutes * 60 * 1000;
             const autoNotes = computeAutomaticNotes({
               existingNotes: null,
               checkInExists: Boolean(checkIn),
