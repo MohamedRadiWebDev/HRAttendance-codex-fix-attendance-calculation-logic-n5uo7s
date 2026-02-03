@@ -172,7 +172,6 @@ export default function BulkAdjustmentsImport() {
         toTime: row.toTime,
         source: "excel",
         sourceFileName: fileName,
-        importedAt: new Date().toISOString(),
         note: null,
       })),
     }, {

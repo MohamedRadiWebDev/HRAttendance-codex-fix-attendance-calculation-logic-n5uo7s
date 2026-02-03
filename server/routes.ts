@@ -148,44 +148,48 @@ export async function registerRoutes(
   });
 
   app.post(api.adjustments.import.path, async (req, res) => {
-    const { rows, sourceFileName } = api.adjustments.import.input.parse(req.body);
-    const employees = await storage.getEmployees();
-    const employeeCodes = new Set(employees.map((emp) => emp.code));
-    const allowedTypes = new Set(ADJUSTMENT_TYPES);
+    try {
+      const { rows, sourceFileName } = api.adjustments.import.input.parse(req.body);
+      const employees = await storage.getEmployees();
+      const employeeCodes = new Set(employees.map((emp) => emp.code));
+      const allowedTypes = new Set(ADJUSTMENT_TYPES);
 
-    const invalid: { rowIndex: number; reason: string }[] = [];
-    const validRows = rows.filter((row: any) => {
-      if (!employeeCodes.has(row.employeeCode)) {
-        invalid.push({ rowIndex: row.rowIndex ?? 0, reason: "كود الموظف غير موجود" });
-        return false;
-      }
-      if (!allowedTypes.has(row.type)) {
-        invalid.push({ rowIndex: row.rowIndex ?? 0, reason: "نوع غير مسموح" });
-        return false;
-      }
-      const fromSeconds = timeStringToSeconds(row.fromTime);
-      const toSeconds = timeStringToSeconds(row.toTime);
-      if (fromSeconds >= toSeconds) {
-        invalid.push({ rowIndex: row.rowIndex ?? 0, reason: "وقت البداية يجب أن يكون قبل النهاية" });
-        return false;
-      }
-      return true;
-    }).map((row: any) => ({
-      employeeCode: row.employeeCode,
-      date: row.date,
-      type: row.type,
-      fromTime: normalizeTimeToHms(row.fromTime),
-      toTime: normalizeTimeToHms(row.toTime),
-      source: row.source || "excel",
-      sourceFileName: sourceFileName || row.sourceFileName || null,
-      importedAt: row.importedAt ? new Date(row.importedAt) : new Date(),
-      note: row.note || null,
-    }));
+      const invalid: { rowIndex: number; reason: string }[] = [];
+      const validRows = rows.filter((row: any) => {
+        if (!employeeCodes.has(row.employeeCode)) {
+          invalid.push({ rowIndex: row.rowIndex ?? 0, reason: "كود الموظف غير موجود" });
+          return false;
+        }
+        if (!allowedTypes.has(row.type)) {
+          invalid.push({ rowIndex: row.rowIndex ?? 0, reason: "نوع غير مسموح" });
+          return false;
+        }
+        const fromSeconds = timeStringToSeconds(row.fromTime);
+        const toSeconds = timeStringToSeconds(row.toTime);
+        if (fromSeconds >= toSeconds) {
+          invalid.push({ rowIndex: row.rowIndex ?? 0, reason: "وقت البداية يجب أن يكون قبل النهاية" });
+          return false;
+        }
+        return true;
+      }).map((row: any) => ({
+        employeeCode: row.employeeCode,
+        date: row.date,
+        type: row.type,
+        fromTime: normalizeTimeToHms(row.fromTime),
+        toTime: normalizeTimeToHms(row.toTime),
+        source: row.source || "excel",
+        sourceFileName: sourceFileName || row.sourceFileName || null,
+        importedAt: new Date(),
+        note: row.note || null,
+      }));
 
-    if (validRows.length > 0) {
-      await storage.createAdjustmentsBulk(validRows);
+      if (validRows.length > 0) {
+        await storage.createAdjustmentsBulk(validRows);
+      }
+      res.json({ inserted: validRows.length, invalid });
+    } catch (err) {
+      res.status(400).json({ message: "Invalid input" });
     }
-    res.json({ inserted: validRows.length, invalid });
   });
 
   // Attendance

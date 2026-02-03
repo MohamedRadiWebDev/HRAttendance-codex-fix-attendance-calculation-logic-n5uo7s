@@ -141,7 +141,17 @@ export const api = {
       path: '/api/adjustments/import',
       input: z.object({
         sourceFileName: z.string().optional(),
-        rows: z.array(insertAdjustmentSchema.extend({ rowIndex: z.number().optional() })),
+        rows: z.array(z.object({
+          rowIndex: z.number().optional(),
+          employeeCode: z.string(),
+          date: z.string(),
+          type: z.string(),
+          fromTime: z.string(),
+          toTime: z.string(),
+          source: z.string().optional(),
+          sourceFileName: z.string().optional(),
+          note: z.string().nullable().optional(),
+        })),
       }),
       responses: {
         200: z.object({
@@ -151,6 +161,7 @@ export const api = {
             reason: z.string(),
           })),
         }),
+        400: errorSchemas.validation,
       },
     },
   },
