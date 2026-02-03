@@ -1,9 +1,10 @@
-import { pgTable, text, serial, integer, boolean, timestamp, jsonb, date, doublePrecision } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, jsonb, doublePrecision, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 // Enums
 export const LEAVE_TYPES = ["annual", "sick", "unpaid", "mission", "permission"] as const;
+export const ADJUSTMENT_TYPES = ["اذن صباحي", "اذن مسائي", "إجازة نص يوم", "مأمورية"] as const;
 export const RULE_TYPES = ["custom_shift", "attendance_exempt", "penalty_override", "ignore_biometric", "overtime_overnight"] as const;
 export const PENALTY_TYPES = ["late_arrival", "early_leave", "missing_stamp", "absence"] as const;
 
@@ -56,14 +57,31 @@ export const specialRules = pgTable("special_rules", {
   params: jsonb("params").notNull(),
 });
 
-export const adjustments = pgTable("adjustments", {
-  id: serial("id").primaryKey(),
-  employeeCode: text("employee_code").notNull(),
-  type: text("type", { enum: LEAVE_TYPES }).notNull(),
-  startDate: text("start_date").notNull(),
-  endDate: text("end_date").notNull(),
-  notes: text("notes"),
-});
+export const adjustments = pgTable(
+  "adjustments",
+  {
+    id: serial("id").primaryKey(),
+    employeeCode: text("employee_code").notNull(),
+    date: text("date").notNull(),
+    type: text("type", { enum: ADJUSTMENT_TYPES }).notNull(),
+    fromTime: text("from_time").notNull(),
+    toTime: text("to_time").notNull(),
+    source: text("source").notNull(),
+    sourceFileName: text("source_file_name"),
+    importedAt: timestamp("imported_at").defaultNow(),
+    note: text("note"),
+  },
+  (table) => ({
+    adjustmentUnique: uniqueIndex("adjustments_unique_idx").on(
+      table.employeeCode,
+      table.date,
+      table.type,
+      table.fromTime,
+      table.toTime,
+      table.source
+    ),
+  })
+);
 
 // Storing calculated attendance for performance/audit
 export const attendanceRecords = pgTable("attendance_records", {
@@ -77,7 +95,34 @@ export const attendanceRecords = pgTable("attendance_records", {
   status: text("status"), // Present, Absent, Late, etc.
   penalties: jsonb("penalties"), // Array of penalty objects
   isOvernight: boolean("is_overnight").default(false),
+  notes: text("notes"),
+  missionStart: text("mission_start"),
+  missionEnd: text("mission_end"),
+  halfDayExcused: boolean("half_day_excused").default(false),
 });
+
+export const midnightLinks = pgTable(
+  "midnight_links",
+  {
+    id: serial("id").primaryKey(),
+    employeeCode: text("employee_code").notNull(),
+    punchDateTime: timestamp("punch_datetime").notNull(),
+    punchDate: text("punch_date").notNull(),
+    punchTime: text("punch_time").notNull(),
+    targetBaseDate: text("target_base_date"),
+    linkType: text("link_type"),
+    status: text("status").notNull().default("pending"),
+    note: text("note"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => ({
+    midnightLinkUnique: uniqueIndex("midnight_links_unique_idx").on(
+      table.employeeCode,
+      table.punchDateTime
+    ),
+  })
+);
 
 export const auditLogs = pgTable("audit_logs", {
   id: serial("id").primaryKey(),
@@ -95,6 +140,7 @@ export const insertTemplateSchema = createInsertSchema(excelTemplates).omit({ id
 export const insertRuleSchema = createInsertSchema(specialRules).omit({ id: true });
 export const insertAdjustmentSchema = createInsertSchema(adjustments).omit({ id: true });
 export const insertAttendanceSchema = createInsertSchema(attendanceRecords).omit({ id: true });
+export const insertMidnightLinkSchema = createInsertSchema(midnightLinks).omit({ id: true });
 
 // Types
 export type Employee = typeof employees.$inferSelect;
@@ -111,6 +157,9 @@ export type InsertAdjustment = z.infer<typeof insertAdjustmentSchema>;
 
 export type AttendanceRecord = typeof attendanceRecords.$inferSelect;
 export type InsertAttendanceRecord = z.infer<typeof insertAttendanceSchema>;
+
+export type MidnightLink = typeof midnightLinks.$inferSelect;
+export type InsertMidnightLink = z.infer<typeof insertMidnightLinkSchema>;
 
 export type BiometricPunch = typeof biometricPunches.$inferSelect;
 export type InsertBiometricPunch = z.infer<typeof insertPunchSchema>;

@@ -118,6 +118,12 @@ export const api = {
     list: {
       method: 'GET' as const,
       path: '/api/adjustments',
+      input: z.object({
+        startDate: z.string().optional(),
+        endDate: z.string().optional(),
+        employeeCode: z.string().optional(),
+        type: z.string().optional(),
+      }).optional(),
       responses: {
         200: z.array(z.custom<typeof adjustments.$inferSelect>()),
       },
@@ -128,6 +134,34 @@ export const api = {
       input: insertAdjustmentSchema,
       responses: {
         201: z.custom<typeof adjustments.$inferSelect>(),
+      },
+    },
+    import: {
+      method: 'POST' as const,
+      path: '/api/adjustments/import',
+      input: z.object({
+        sourceFileName: z.string().optional(),
+        rows: z.array(z.object({
+          rowIndex: z.number().optional(),
+          employeeCode: z.string(),
+          date: z.string(),
+          type: z.string(),
+          fromTime: z.string(),
+          toTime: z.string(),
+          source: z.string().optional(),
+          sourceFileName: z.string().optional(),
+          note: z.string().nullable().optional(),
+        })),
+      }),
+      responses: {
+        200: z.object({
+          inserted: z.number(),
+          invalid: z.array(z.object({
+            rowIndex: z.number(),
+            reason: z.string(),
+          })),
+        }),
+        400: errorSchemas.validation,
       },
     },
   },
@@ -154,6 +188,63 @@ export const api = {
       }),
       responses: {
         200: z.object({ message: z.string(), processedCount: z.number() }),
+      },
+    },
+  },
+  midnightLinks: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/midnight-links',
+      input: z.object({
+        startDate: z.string().optional(),
+        endDate: z.string().optional(),
+        employeeCode: z.string().optional(),
+        sector: z.string().optional(),
+        branch: z.string().optional(),
+      }).optional(),
+      responses: {
+        200: z.array(z.object({
+          employeeCode: z.string(),
+          employeeName: z.string().nullable(),
+          punchDate: z.string(),
+          punchTime: z.string(),
+          punchDateTime: z.string(),
+          suggestedPreviousDate: z.string(),
+          status: z.string(),
+          targetBaseDate: z.string().nullable(),
+          note: z.string().nullable(),
+        })),
+      },
+    },
+    action: {
+      method: 'POST' as const,
+      path: '/api/midnight-links/action',
+      input: z.object({
+        employeeCode: z.string(),
+        punchDateTime: z.string(),
+        action: z.enum(["previous_day_checkout", "current_day_checkin", "ignore"]),
+        targetBaseDate: z.string().nullable().optional(),
+        note: z.string().nullable().optional(),
+      }),
+      responses: {
+        200: z.object({ message: z.string() }),
+      },
+    },
+    import: {
+      method: 'POST' as const,
+      path: '/api/midnight-links/import',
+      input: z.object({
+        rows: z.array(z.object({
+          employeeCode: z.string(),
+          punchDate: z.string(),
+          punchTime: z.string(),
+          linkToPreviousDay: z.number(),
+          baseDate: z.string(),
+          note: z.string().nullable().optional(),
+        })),
+      }),
+      responses: {
+        200: z.object({ inserted: z.number(), invalid: z.array(z.object({ rowIndex: z.number(), reason: z.string() })) }),
       },
     },
   },

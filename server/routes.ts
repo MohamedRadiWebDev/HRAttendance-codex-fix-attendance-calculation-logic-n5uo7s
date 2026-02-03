@@ -3,7 +3,8 @@ import type { Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
-import { insertEmployeeSchema, insertTemplateSchema, insertRuleSchema, insertAdjustmentSchema } from "@shared/schema";
+import { insertEmployeeSchema, insertTemplateSchema, insertRuleSchema, insertAdjustmentSchema, ADJUSTMENT_TYPES } from "@shared/schema";
+import { computeAdjustmentEffects, computeAutomaticNotes, computeCheckInOutWithLinks, computeOvertimeHours, computePenaltyEntries, filterLinkedPunches, normalizeTimeToHms, secondsToHms, timeStringToSeconds } from "./attendance-utils";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -126,7 +127,13 @@ export async function registerRoutes(
 
   // Adjustments
   app.get(api.adjustments.list.path, async (req, res) => {
-    const adjustments = await storage.getAdjustments();
+    const { startDate, endDate, employeeCode, type } = req.query;
+    const adjustments = await storage.getAdjustments({
+      startDate: startDate ? String(startDate) : undefined,
+      endDate: endDate ? String(endDate) : undefined,
+      employeeCode: employeeCode ? String(employeeCode) : undefined,
+      type: type ? String(type) : undefined,
+    });
     res.json(adjustments);
   });
 
@@ -135,6 +142,51 @@ export async function registerRoutes(
       const input = api.adjustments.create.input.parse(req.body);
       const adj = await storage.createAdjustment(input);
       res.status(201).json(adj);
+    } catch (err) {
+      res.status(400).json({ message: "Invalid input" });
+    }
+  });
+
+  app.post(api.adjustments.import.path, async (req, res) => {
+    try {
+      const { rows, sourceFileName } = api.adjustments.import.input.parse(req.body);
+      const employees = await storage.getEmployees();
+      const employeeCodes = new Set(employees.map((emp) => emp.code));
+      const allowedTypes = new Set(ADJUSTMENT_TYPES);
+
+      const invalid: { rowIndex: number; reason: string }[] = [];
+      const validRows = rows.filter((row: any) => {
+        if (!employeeCodes.has(row.employeeCode)) {
+          invalid.push({ rowIndex: row.rowIndex ?? 0, reason: "كود الموظف غير موجود" });
+          return false;
+        }
+        if (!allowedTypes.has(row.type)) {
+          invalid.push({ rowIndex: row.rowIndex ?? 0, reason: "نوع غير مسموح" });
+          return false;
+        }
+        const fromSeconds = timeStringToSeconds(row.fromTime);
+        const toSeconds = timeStringToSeconds(row.toTime);
+        if (fromSeconds >= toSeconds) {
+          invalid.push({ rowIndex: row.rowIndex ?? 0, reason: "وقت البداية يجب أن يكون قبل النهاية" });
+          return false;
+        }
+        return true;
+      }).map((row: any) => ({
+        employeeCode: row.employeeCode,
+        date: row.date,
+        type: row.type,
+        fromTime: normalizeTimeToHms(row.fromTime),
+        toTime: normalizeTimeToHms(row.toTime),
+        source: row.source || "excel",
+        sourceFileName: sourceFileName || row.sourceFileName || null,
+        importedAt: new Date(),
+        note: row.note || null,
+      }));
+
+      if (validRows.length > 0) {
+        await storage.createAdjustmentsBulk(validRows);
+      }
+      res.json({ inserted: validRows.length, invalid });
     } catch (err) {
       res.status(400).json({ message: "Invalid input" });
     }
@@ -160,6 +212,123 @@ export async function registerRoutes(
       offset
     );
     res.json({ data, total, page: safePage, limit: safeLimit });
+  });
+
+  // Midnight Links
+  app.get(api.midnightLinks.list.path, async (req, res) => {
+    const { startDate, endDate, employeeCode, sector, branch } = req.query;
+    const effectiveStart = startDate ? String(startDate) : "1970-01-01";
+    const effectiveEnd = endDate ? String(endDate) : "2099-12-31";
+    const thresholdSeconds = 9 * 60 * 60;
+
+    const employees = await storage.getEmployees();
+    const filteredEmployees = employees.filter((emp) => {
+      if (employeeCode && emp.code !== String(employeeCode)) return false;
+      if (sector && emp.sector !== String(sector)) return false;
+      if (branch && emp.branch !== String(branch)) return false;
+      return true;
+    });
+    const employeeMap = new Map(filteredEmployees.map((emp) => [emp.code, emp]));
+
+    const [startYear, startMonth, startDay] = effectiveStart.split("-").map(Number);
+    const [endYear, endMonth, endDay] = effectiveEnd.split("-").map(Number);
+    const punchStart = new Date(Date.UTC(startYear, startMonth - 1, startDay, 0, 0, 0, 0));
+    const punchEnd = new Date(Date.UTC(endYear, endMonth - 1, endDay, 23, 59, 59, 999));
+    const punches = await storage.getPunches(punchStart, punchEnd);
+
+    const filteredPunches = punches.filter((punch) => employeeMap.has(punch.employeeCode));
+    const linkRecords = await storage.getMidnightLinksByDateRange(effectiveStart, effectiveEnd, employeeCode as string | undefined);
+    const linkMap = new Map(linkRecords.map((link) => [`${link.employeeCode}__${link.punchDateTime.toISOString()}`, link]));
+
+    const results = filteredPunches.flatMap((punch) => {
+      const localPunch = punch.punchDatetime;
+      const hours = localPunch.getUTCHours();
+      const minutes = localPunch.getUTCMinutes();
+      const seconds = localPunch.getUTCSeconds();
+      const totalSeconds = hours * 3600 + minutes * 60 + seconds;
+      if (totalSeconds > thresholdSeconds) return [];
+      const dateStr = localPunch.toISOString().slice(0, 10);
+      if (dateStr < effectiveStart || dateStr > effectiveEnd) return [];
+      const timeStr = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+      const suggestedPreviousDate = new Date(`${dateStr}T00:00:00Z`);
+      suggestedPreviousDate.setUTCDate(suggestedPreviousDate.getUTCDate() - 1);
+      const previousDateStr = suggestedPreviousDate.toISOString().slice(0, 10);
+      const linkKey = `${punch.employeeCode}__${punch.punchDatetime.toISOString()}`;
+      const link = linkMap.get(linkKey);
+      return [{
+        employeeCode: punch.employeeCode,
+        employeeName: employeeMap.get(punch.employeeCode)?.nameAr || null,
+        punchDate: dateStr,
+        punchTime: timeStr,
+        punchDateTime: punch.punchDatetime.toISOString(),
+        suggestedPreviousDate: previousDateStr,
+        status: link?.status || "pending",
+        targetBaseDate: link?.targetBaseDate || null,
+        note: link?.note || null,
+      }];
+    });
+
+    res.json(results);
+  });
+
+  app.post(api.midnightLinks.action.path, async (req, res) => {
+    const { employeeCode, punchDateTime, action, targetBaseDate, note } = api.midnightLinks.action.input.parse(req.body);
+    const punchDate = punchDateTime.slice(0, 10);
+    const punchTime = punchDateTime.slice(11, 19);
+    const status = action === "ignore" ? "ignored" : action;
+    const linkType = action === "previous_day_checkout" ? "previous_day_checkout" : null;
+
+    await storage.upsertMidnightLink({
+      employeeCode,
+      punchDateTime: new Date(punchDateTime),
+      punchDate,
+      punchTime,
+      targetBaseDate: action === "previous_day_checkout" ? targetBaseDate || null : null,
+      linkType,
+      status,
+      note: note || null,
+      updatedAt: new Date(),
+    });
+
+    res.json({ message: "Link updated" });
+  });
+
+  app.post(api.midnightLinks.import.path, async (req, res) => {
+    const { rows } = api.midnightLinks.import.input.parse(req.body);
+    const employees = await storage.getEmployees();
+    const employeeCodes = new Set(employees.map((emp) => emp.code));
+    const invalid: { rowIndex: number; reason: string }[] = [];
+
+    const links = rows.flatMap((row, index) => {
+      const rowIndex = index + 2;
+      if (!employeeCodes.has(row.employeeCode)) {
+        invalid.push({ rowIndex, reason: "كود الموظف غير موجود" });
+        return [];
+      }
+      if (!row.punchDate || !row.punchTime) {
+        invalid.push({ rowIndex, reason: "تاريخ أو وقت البصمة غير صالح" });
+        return [];
+      }
+      const punchDateTime = `${row.punchDate}T${row.punchTime}:00Z`;
+      const action = row.linkToPreviousDay === 1 ? "previous_day_checkout" : "current_day_checkin";
+      return [{
+        employeeCode: row.employeeCode,
+        punchDateTime: new Date(punchDateTime),
+        punchDate: row.punchDate,
+        punchTime: row.punchTime,
+        targetBaseDate: action === "previous_day_checkout" ? row.baseDate : null,
+        linkType: action === "previous_day_checkout" ? "previous_day_checkout" : null,
+        status: action,
+        note: row.note || null,
+        updatedAt: new Date(),
+      }];
+    });
+
+    if (links.length > 0) {
+      await storage.createMidnightLinksBulk(links);
+    }
+
+    res.json({ inserted: links.length, invalid });
   });
 
   app.post(api.attendance.process.path, async (req, res) => {
@@ -198,8 +367,31 @@ export async function registerRoutes(
       const punches = await storage.getPunches(searchStart, searchEnd);
       const rules = await storage.getRules();
       const adjustments = await storage.getAdjustments();
+      const endPlusOne = new Date(`${endDate}T00:00:00Z`);
+      endPlusOne.setUTCDate(endPlusOne.getUTCDate() + 1);
+      const midnightLinks = await storage.getMidnightLinksByDateRange(startDate, endPlusOne.toISOString().slice(0, 10));
       
       let processedCount = 0;
+
+      const adjustmentsByEmployeeDate = new Map<string, typeof adjustments>();
+      adjustments.forEach((adjustment) => {
+        const key = `${adjustment.employeeCode}__${adjustment.date}`;
+        const existing = adjustmentsByEmployeeDate.get(key) || [];
+        existing.push(adjustment);
+        adjustmentsByEmployeeDate.set(key, existing);
+      });
+
+      const linkedByTargetDate = new Map<string, typeof midnightLinks>();
+      const linkedByPunchKey = new Set<string>();
+      midnightLinks.forEach((link) => {
+        if (link.linkType === "previous_day_checkout" && link.targetBaseDate) {
+          const targetKey = `${link.employeeCode}__${link.targetBaseDate}`;
+          const existing = linkedByTargetDate.get(targetKey) || [];
+          existing.push(link);
+          linkedByTargetDate.set(targetKey, existing);
+          linkedByPunchKey.add(`${link.employeeCode}__${link.punchDateTime.toISOString()}`);
+        }
+      });
       
       // Iterate days in local-date space
       const startLocal = new Date(Date.UTC(startYear, startMonth - 1, startDay));
@@ -233,12 +425,8 @@ export async function registerRoutes(
             currentShiftEnd = (shiftRule.params as any).shiftEnd || currentShiftEnd;
           }
 
-          // 3. Check for leaves/adjustments
-          const activeAdj = adjustments.find(a => 
-            a.employeeCode === employee.code && 
-            dateStr >= a.startDate && 
-            dateStr <= a.endDate
-          );
+          // 3. Check for adjustments (excel + manual)
+          const dayAdjustments = adjustmentsByEmployeeDate.get(`${employee.code}__${dateStr}`) || [];
 
           // Get punches for this employee on this local day
           // A punch belongs to this day if its local time matches dateStr
@@ -250,56 +438,154 @@ export async function registerRoutes(
             const py = localPunch.getUTCFullYear();
             const pm = String(localPunch.getUTCMonth() + 1).padStart(2, "0");
             const pd = String(localPunch.getUTCDate()).padStart(2, "0");
-            return `${py}-${pm}-${pd}` === dateStr;
+            const isSameDay = `${py}-${pm}-${pd}` === dateStr;
+            return isSameDay;
           }).sort((a, b) => a.punchDatetime.getTime() - b.punchDatetime.getTime());
+          const filteredDayPunches = filterLinkedPunches({
+            dayPunches,
+            linkedKeys: linkedByPunchKey,
+            employeeCode: employee.code,
+          });
 
-          if (dayPunches.length > 0 || activeAdj) {
-            const checkIn = dayPunches.length > 0 ? dayPunches[0].punchDatetime : null;
-            const checkOut = dayPunches.length > 1 ? dayPunches[dayPunches.length - 1].punchDatetime : null;
-            
+          const linkedPunches = (linkedByTargetDate.get(`${employee.code}__${dateStr}`) || [])
+            .map((link) => link.punchDateTime);
+          const { checkIn, checkOut } = computeCheckInOutWithLinks({
+            dayPunches: filteredDayPunches.map(p => p.punchDatetime),
+            linkedPunches,
+          });
+
+          if (filteredDayPunches.length > 0 || linkedPunches.length > 0 || dayAdjustments.length > 0) {
+
+            const checkInLocal = checkIn ? toLocal(checkIn) : null;
+            const checkOutLocal = checkOut ? toLocal(checkOut) : null;
+            const checkInSeconds = checkInLocal
+              ? checkInLocal.getUTCHours() * 3600 + checkInLocal.getUTCMinutes() * 60 + checkInLocal.getUTCSeconds()
+              : null;
+            const checkOutSeconds = checkOutLocal
+              ? checkOutLocal.getUTCHours() * 3600 + checkOutLocal.getUTCMinutes() * 60 + checkOutLocal.getUTCSeconds()
+              : null;
+            const checkOutDateStr = checkOutLocal
+              ? `${checkOutLocal.getUTCFullYear()}-${String(checkOutLocal.getUTCMonth() + 1).padStart(2, "0")}-${String(checkOutLocal.getUTCDate()).padStart(2, "0")}`
+              : null;
+            const overtimeCheckOutSeconds = checkOutSeconds !== null && checkOutDateStr && checkOutDateStr > dateStr
+              ? checkOutSeconds + 24 * 60 * 60
+              : checkOutSeconds;
+
+            const adjustmentEffects = computeAdjustmentEffects({
+              shiftStart: currentShiftStart,
+              shiftEnd: currentShiftEnd,
+              adjustments: dayAdjustments.map((adj) => ({
+                type: adj.type,
+                fromTime: adj.fromTime,
+                toTime: adj.toTime,
+              })),
+              checkInSeconds,
+              checkOutSeconds,
+            });
+
+            const toUtcFromSeconds = (seconds: number) => {
+              const hours = Math.floor(seconds / 3600);
+              const minutes = Math.floor((seconds % 3600) / 60);
+              const secs = Math.floor(seconds % 60);
+              const shiftTimeUTC = new Date(Date.UTC(
+                d.getUTCFullYear(),
+                d.getUTCMonth(),
+                d.getUTCDate(),
+                hours,
+                minutes,
+                secs
+              ));
+              shiftTimeUTC.setTime(shiftTimeUTC.getTime() + offsetMinutes * 60 * 1000);
+              return shiftTimeUTC;
+            };
+
+            const effectiveShiftStartUTC = toUtcFromSeconds(adjustmentEffects.effectiveShiftStartSeconds);
+            const effectiveShiftEndUTC = toUtcFromSeconds(adjustmentEffects.effectiveShiftEndSeconds);
+            const missionStart = adjustmentEffects.missionStartSeconds !== null
+              ? secondsToHms(adjustmentEffects.missionStartSeconds)
+              : null;
+            const missionEnd = adjustmentEffects.missionEndSeconds !== null
+              ? secondsToHms(adjustmentEffects.missionEndSeconds)
+              : null;
+
+            const firstStampSeconds = adjustmentEffects.firstStampSeconds;
+            const lastStampSeconds = adjustmentEffects.lastStampSeconds;
             let totalHours = 0;
-            if (checkIn && checkOut) {
-              totalHours = (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
+            if (firstStampSeconds !== null && lastStampSeconds !== null) {
+              const firstStampUTC = toUtcFromSeconds(firstStampSeconds);
+              const lastStampUTC = toUtcFromSeconds(lastStampSeconds);
+              totalHours = (lastStampUTC.getTime() - firstStampUTC.getTime()) / (1000 * 60 * 60);
             }
 
-            let penalties = [];
-            let status = activeAdj ? "Excused" : "Present";
-            const shiftStartParts = currentShiftStart.split(':');
-            const shiftStartHour = parseInt(shiftStartParts[0]);
-            const shiftStartMin = parseInt(shiftStartParts[1]);
-            
-            // shiftStartLocal represents the shift start time in LOCAL time for this day
-            // We then convert it to UTC to compare with the punch UTC
-            const shiftStartUTC = new Date(Date.UTC(
-              d.getUTCFullYear(),
-              d.getUTCMonth(),
-              d.getUTCDate(),
-              shiftStartHour,
-              shiftStartMin,
-              0
-            ));
-            // Adjust shiftStartUTC to be actual UTC (reverse the local-to-UTC offset)
-            shiftStartUTC.setTime(shiftStartUTC.getTime() + offsetMinutes * 60 * 1000);
+            const penalties: any[] = [];
+            let status = "Present";
+            const graceMinutes = 15;
+            const suppressPenalties = adjustmentEffects.suppressPenalties;
+            const hasMission = adjustmentEffects.missionStartSeconds !== null && adjustmentEffects.missionEndSeconds !== null;
+            const halfDayExcused = adjustmentEffects.halfDayExcused;
+            const excusedByHalfDayNoPunch = halfDayExcused && !checkIn && !checkOut;
+            const excusedByMission = hasMission;
+            const excusedDay = excusedByHalfDayNoPunch || excusedByMission;
+            const isExcusedForPenalties = excusedDay || suppressPenalties;
+            let latePenaltyValue = 0;
+            let lateMinutes = 0;
 
-            if (!activeAdj && checkIn) {
-              const diffMs = checkIn.getTime() - shiftStartUTC.getTime();
-              const lateMinutes = Math.max(0, Math.ceil(diffMs / (1000 * 60)));
-              
-              if (diffMs > 15 * 60 * 1000) {
+            if (!isExcusedForPenalties && checkIn) {
+              const diffMs = checkIn.getTime() - effectiveShiftStartUTC.getTime();
+              lateMinutes = Math.max(0, Math.ceil(diffMs / (1000 * 60)));
+
+              if (diffMs > graceMinutes * 60 * 1000) {
                 status = "Late";
-                let latePenalty = 0;
-                if (lateMinutes > 60) latePenalty = 1;
-                else if (lateMinutes > 30) latePenalty = 0.5;
-                else latePenalty = 0.25;
-                
-                penalties.push({ type: "تأخير", value: latePenalty, minutes: lateMinutes });
+                if (lateMinutes > 60) latePenaltyValue = 1;
+                else if (lateMinutes > 30) latePenaltyValue = 0.5;
+                else latePenaltyValue = 0.25;
               } else {
                 status = "Present";
               }
-            } else if (!activeAdj && !checkIn) {
+            } else if (!isExcusedForPenalties && !checkIn && !checkOut) {
               status = "Absent";
               penalties.push({ type: "غياب", value: 1 });
             }
+
+            const missingCheckout = Boolean(checkIn && !checkOut) && !isExcusedForPenalties;
+            const earlyLeaveThreshold = effectiveShiftEndUTC.getTime() - graceMinutes * 60 * 1000;
+            const earlyLeaveTriggered = Boolean(
+              checkOut &&
+              !missingCheckout &&
+              !isExcusedForPenalties &&
+              checkOut.getTime() < earlyLeaveThreshold
+            );
+
+            penalties.push(
+              ...computePenaltyEntries({
+                isExcused: isExcusedForPenalties,
+                latePenaltyValue,
+                lateMinutes,
+                missingCheckout,
+                earlyLeaveTriggered,
+              })
+            );
+
+            if (excusedDay) {
+              status = hasMission && adjustmentEffects.missionEndSeconds !== null &&
+                adjustmentEffects.missionEndSeconds >= timeStringToSeconds(currentShiftEnd)
+                ? "Present"
+                : "Excused";
+            }
+            const autoNotes = computeAutomaticNotes({
+              existingNotes: null,
+              checkInExists: Boolean(checkIn),
+              checkOutExists: Boolean(checkOut),
+              missingStampExcused: excusedDay,
+              earlyLeaveExcused: excusedDay,
+              checkOutBeforeEarlyLeave: Boolean(checkOut && checkOut.getTime() < earlyLeaveThreshold),
+            });
+
+            const overtimeHours = computeOvertimeHours({
+              shiftEnd: currentShiftEnd,
+              checkOutSeconds: overtimeCheckOutSeconds,
+              nextDayShiftStart: "09:00",
+            });
 
             await storage.createAttendanceRecord({
               employeeCode: employee.code,
@@ -308,9 +594,13 @@ export async function registerRoutes(
               checkOut,
               totalHours,
               status,
-              overtimeHours: Math.max(0, totalHours - 8),
+              overtimeHours,
               penalties,
-              isOvernight: activeRules.some(r => r.ruleType === 'overtime_overnight')
+              isOvernight: activeRules.some(r => r.ruleType === 'overtime_overnight'),
+              notes: autoNotes || null,
+              missionStart,
+              missionEnd,
+              halfDayExcused,
             });
             processedCount++;
           } else {
@@ -324,7 +614,11 @@ export async function registerRoutes(
               status: "Absent",
               penalties: [{ type: "غياب", value: 1 }],
               overtimeHours: 0,
-              isOvernight: false
+              isOvernight: false,
+              notes: null,
+              missionStart: null,
+              missionEnd: null,
+              halfDayExcused: false,
             });
             processedCount++;
           }

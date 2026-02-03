@@ -4,10 +4,22 @@ import {
   excelTemplates, type Template, type InsertTemplate,
   specialRules, type SpecialRule, type InsertSpecialRule,
   adjustments, type Adjustment, type InsertAdjustment,
-  attendanceRecords, type AttendanceRecord, type InsertAttendanceRecord
+  attendanceRecords, type AttendanceRecord, type InsertAttendanceRecord,
+  midnightLinks, type MidnightLink, type InsertMidnightLink
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, gte, lte, inArray, sql, desc } from "drizzle-orm";
+
+const splitNotes = (notes?: string | null) =>
+  (notes || "")
+    .split(/[،,]/)
+    .map((note) => note.trim())
+    .filter(Boolean);
+
+const mergeNotes = (existing?: string | null, next?: string | null) => {
+  const noteSet = new Set([...splitNotes(existing), ...splitNotes(next)]);
+  return Array.from(noteSet).join("، ");
+};
 
 export interface IStorage {
   // Employees
@@ -29,8 +41,9 @@ export interface IStorage {
   deleteRule(id: number): Promise<void>;
 
   // Adjustments
-  getAdjustments(): Promise<Adjustment[]>;
+  getAdjustments(filters?: { startDate?: string; endDate?: string; employeeCode?: string; type?: string }): Promise<Adjustment[]>;
   createAdjustment(adjustment: InsertAdjustment): Promise<Adjustment>;
+  createAdjustmentsBulk(adjustments: InsertAdjustment[]): Promise<Adjustment[]>;
 
   // Punches
   createPunch(punch: InsertBiometricPunch): Promise<BiometricPunch>;
@@ -40,6 +53,12 @@ export interface IStorage {
   getAttendance(startDate: string, endDate: string, employeeCode?: string, limit?: number, offset?: number): Promise<{ data: AttendanceRecord[], total: number }>;
   createAttendanceRecord(record: InsertAttendanceRecord): Promise<AttendanceRecord>;
   updateAttendanceRecord(id: number, record: Partial<InsertAttendanceRecord>): Promise<AttendanceRecord>;
+  getAttendanceRecord(employeeCode: string, date: string): Promise<AttendanceRecord | undefined>;
+
+  // Midnight links
+  getMidnightLinksByDateRange(startDate: string, endDate: string, employeeCode?: string): Promise<MidnightLink[]>;
+  upsertMidnightLink(link: InsertMidnightLink): Promise<MidnightLink>;
+  createMidnightLinksBulk(links: InsertMidnightLink[]): Promise<MidnightLink[]>;
   
   // Bulk operations for import
   createEmployeesBulk(employees: InsertEmployee[]): Promise<Employee[]>;
@@ -52,6 +71,7 @@ export interface IStorage {
 export class DatabaseStorage implements IStorage {
   async wipeAllData(): Promise<void> {
     await db.delete(attendanceRecords);
+    await db.delete(midnightLinks);
     await db.delete(adjustments);
     await db.delete(specialRules);
     await db.delete(biometricPunches);
@@ -118,13 +138,70 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Adjustments
-  async getAdjustments(): Promise<Adjustment[]> {
-    return await db.select().from(adjustments);
+  async getAdjustments(filters?: { startDate?: string; endDate?: string; employeeCode?: string; type?: string }): Promise<Adjustment[]> {
+    if (!filters) {
+      return await db.select().from(adjustments);
+    }
+
+    const conditions = [];
+    if (filters.startDate) conditions.push(gte(adjustments.date, filters.startDate));
+    if (filters.endDate) conditions.push(lte(adjustments.date, filters.endDate));
+    if (filters.employeeCode) {
+      conditions.push(eq(adjustments.employeeCode, filters.employeeCode));
+    }
+    if (filters.type) {
+      conditions.push(eq(adjustments.type, filters.type));
+    }
+
+    if (conditions.length === 0) {
+      return await db.select().from(adjustments);
+    }
+
+    return await db.select().from(adjustments).where(and(...conditions));
   }
 
   async createAdjustment(insertAdjustment: InsertAdjustment): Promise<Adjustment> {
-    const [adj] = await db.insert(adjustments).values(insertAdjustment).returning();
+    const [adj] = await db.insert(adjustments)
+      .values(insertAdjustment)
+      .onConflictDoUpdate({
+        target: [
+          adjustments.employeeCode,
+          adjustments.date,
+          adjustments.type,
+          adjustments.fromTime,
+          adjustments.toTime,
+          adjustments.source,
+        ],
+        set: {
+          note: insertAdjustment.note ?? null,
+          sourceFileName: insertAdjustment.sourceFileName ?? null,
+          importedAt: insertAdjustment.importedAt ?? new Date(),
+        },
+      })
+      .returning();
     return adj;
+  }
+
+  async createAdjustmentsBulk(insertAdjustments: InsertAdjustment[]): Promise<Adjustment[]> {
+    if (insertAdjustments.length === 0) return [];
+    return await db.insert(adjustments)
+      .values(insertAdjustments)
+      .onConflictDoUpdate({
+        target: [
+          adjustments.employeeCode,
+          adjustments.date,
+          adjustments.type,
+          adjustments.fromTime,
+          adjustments.toTime,
+          adjustments.source,
+        ],
+        set: {
+          note: sql`excluded.note`,
+          sourceFileName: sql`excluded.source_file_name`,
+          importedAt: sql`excluded.imported_at`,
+        },
+      })
+      .returning();
   }
 
   // Punches
@@ -199,8 +276,9 @@ export class DatabaseStorage implements IStorage {
       );
 
     if (existing) {
+      const nextNotes = mergeNotes(existing.notes, insertRecord.notes ?? null);
       const [updated] = await db.update(attendanceRecords)
-        .set(insertRecord)
+        .set({ ...insertRecord, notes: nextNotes || null })
         .where(eq(attendanceRecords.id, existing.id))
         .returning();
       return updated;
@@ -213,6 +291,56 @@ export class DatabaseStorage implements IStorage {
   async updateAttendanceRecord(id: number, update: Partial<InsertAttendanceRecord>): Promise<AttendanceRecord> {
     const [record] = await db.update(attendanceRecords).set(update).where(eq(attendanceRecords.id, id)).returning();
     return record;
+  }
+
+  async getAttendanceRecord(employeeCode: string, date: string): Promise<AttendanceRecord | undefined> {
+    const [record] = await db.select()
+      .from(attendanceRecords)
+      .where(and(eq(attendanceRecords.employeeCode, employeeCode), eq(attendanceRecords.date, date)));
+    return record;
+  }
+
+  // Midnight links
+  async getMidnightLinksByDateRange(startDate: string, endDate: string, employeeCode?: string): Promise<MidnightLink[]> {
+    const conditions = [gte(midnightLinks.punchDate, startDate), lte(midnightLinks.punchDate, endDate)];
+    if (employeeCode) {
+      conditions.push(eq(midnightLinks.employeeCode, employeeCode));
+    }
+    return await db.select().from(midnightLinks).where(and(...conditions));
+  }
+
+  async upsertMidnightLink(insertLink: InsertMidnightLink): Promise<MidnightLink> {
+    const [link] = await db.insert(midnightLinks)
+      .values(insertLink)
+      .onConflictDoUpdate({
+        target: [midnightLinks.employeeCode, midnightLinks.punchDateTime],
+        set: {
+          targetBaseDate: insertLink.targetBaseDate ?? null,
+          linkType: insertLink.linkType ?? null,
+          status: insertLink.status,
+          note: insertLink.note ?? null,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return link;
+  }
+
+  async createMidnightLinksBulk(insertLinks: InsertMidnightLink[]): Promise<MidnightLink[]> {
+    if (insertLinks.length === 0) return [];
+    return await db.insert(midnightLinks)
+      .values(insertLinks)
+      .onConflictDoUpdate({
+        target: [midnightLinks.employeeCode, midnightLinks.punchDateTime],
+        set: {
+          targetBaseDate: sql`excluded.target_base_date`,
+          linkType: sql`excluded.link_type`,
+          status: sql`excluded.status`,
+          note: sql`excluded.note`,
+          updatedAt: sql`excluded.updated_at`,
+        },
+      })
+      .returning();
   }
 
   // Bulk
